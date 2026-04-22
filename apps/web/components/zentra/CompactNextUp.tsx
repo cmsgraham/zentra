@@ -83,6 +83,7 @@ export function CompactNextUp({ date, onSeePlan, onExpand, onDismiss, onReflect 
   const { activeBlock, activeBlockIndex } = derived;
 
   const startByTitle = useFocusStore((s) => s.startByTitle);
+  const lastEndedAt = useFocusStore((s) => s.lastEndedAt);
 
   const [momentum, setMomentum] = useState<{ completedCount: number; totalMinutes: number } | null>(null);
   const [focusDoneTitles, setFocusDoneTitles] = useState<Set<string>>(new Set());
@@ -130,7 +131,14 @@ export function CompactNextUp({ date, onSeePlan, onExpand, onDismiss, onReflect 
     return Array.from(movedOn).filter((t) => !completedTasks.has(t) && !focusDoneTitles.has(t));
   }, [movedOn, completedTasks, focusDoneTitles]);
 
-  // Load today's momentum once.
+  // Refresh today's completed sessions whenever:
+  //  - the component mounts
+  //  - a focus session ends (lastEndedAt changes) — catches tasks marked done
+  //    via the floating popup while CompactNextUp is alive
+  //  - the user returns from a 5-min break — state may have changed in another
+  //    tab / via the floating popup during the break
+  // This prevents the "That task was already marked done" toast from firing
+  // repeatedly on stale proposals.
   useEffect(() => {
     let cancelled = false;
     api<{ sessions: { taskTitle: string; outcome: string }[]; completedCount: number; totalMinutes: number }>('/focus/sessions/today')
@@ -139,10 +147,13 @@ export function CompactNextUp({ date, onSeePlan, onExpand, onDismiss, onReflect 
         setMomentum({ completedCount: r.completedCount, totalMinutes: r.totalMinutes });
         const doneTitles = new Set(r.sessions.filter((s) => s.outcome === 'completed').map((s) => s.taskTitle));
         setFocusDoneTitles(doneTitles);
+        // If the pre-break snapshot is now known-done, drop it so the card
+        // falls through to the freshly-computed `next`.
+        setPendingNext((prev) => (prev && doneTitles.has(prev.title) ? null : prev));
       })
       .catch(() => { /* non-critical */ });
     return () => { cancelled = true; };
-  }, []);
+  }, [lastEndedAt, resting]);
 
   // Prefer the pre-break snapshot so the post-break card is always consistent
   // with the pre-break one. Falls back to the computed next when no snapshot.
