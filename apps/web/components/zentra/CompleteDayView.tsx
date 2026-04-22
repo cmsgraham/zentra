@@ -58,24 +58,11 @@ export function CompleteDayView({ completedCount, totalMinutes, onAddAnother }: 
         </p>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
-        <button
-          onClick={onAddAnother}
-          style={{
-            padding: '14px',
-            background: 'var(--ink-surface)',
-            border: '1px solid var(--ink-border)',
-            borderRadius: '10px',
-            color: 'var(--ink-text)',
-            fontSize: '0.9375rem',
-            cursor: 'pointer',
-          }}
-        >
-          Add another intention
-        </button>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', width: '100%', alignItems: 'center' }}>
         <button
           onClick={() => navigate('/reflect')}
           style={{
+            width: '100%',
             padding: '14px',
             background: 'var(--ink-text)',
             border: 'none',
@@ -86,20 +73,22 @@ export function CompleteDayView({ completedCount, totalMinutes, onAddAnother }: 
             cursor: 'pointer',
           }}
         >
-          Reflect on today
+          Close the day
         </button>
         <button
-          onClick={() => navigate('/planner')}
+          onClick={onAddAnother}
           style={{
-            padding: '12px',
+            padding: '4px 8px',
             background: 'transparent',
             border: 'none',
             color: 'var(--ink-text-muted)',
-            fontSize: '0.875rem',
+            fontSize: '0.8125rem',
             cursor: 'pointer',
+            textDecoration: 'underline',
+            textUnderlineOffset: '3px',
           }}
         >
-          Close the day
+          Not done yet — add another intention
         </button>
       </div>
     </div>
