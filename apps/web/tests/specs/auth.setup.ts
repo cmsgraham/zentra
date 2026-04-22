@@ -9,11 +9,11 @@ setup('authenticate', async ({ page }) => {
   }
 
   await page.goto('/login');
-  await page.getByLabel(/email/i).fill(EMAIL);
-  await page.getByLabel(/password/i).fill(PASSWORD);
-  await page.getByRole('button', { name: /log in|sign in/i }).click();
+  await page.locator('input[type="email"]').fill(EMAIL);
+  await page.locator('input[type="password"]').fill(PASSWORD);
+  await page.getByRole('button', { name: /sign in|log in/i }).click();
 
-  // Wait for redirect away from /login (to /today, /workspaces, or similar)
+  // Wait for redirect away from /login (goes to /workspaces per login page)
   await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 15000 });
   await expect(page).not.toHaveURL(/\/login/);
 
