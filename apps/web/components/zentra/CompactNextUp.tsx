@@ -103,8 +103,19 @@ export function CompactNextUp({ date, onSeePlan, onExpand, onDismiss, onReflect 
   // Tasks the user already "moved on" from today are excluded so we don't
   // immediately send them back to the same thing.
   const movedOn = useMemo(() => listMovedOnTasks(date), [date, loaded]);
+
+  // Plan blocks decorate segmented tasks as "Title — Part N/M" while the
+  // focus-session history stores the bare parent title. Normalise for
+  // availability checks so completing *any* segment hides the whole task.
+  const stripSegment = (t: string) => t.replace(/\s+—\s+Part\s+\d+\/\d+\s*$/, '');
+
   const next = useMemo<{ title: string; minutes: number; from: 'current' | 'next' } | null>(() => {
-    const isAvailable = (t: string) => !completedTasks.has(t) && !movedOn.has(t) && !focusDoneTitles.has(t);
+    const isAvailable = (t: string) => {
+      if (completedTasks.has(t) || movedOn.has(t) || focusDoneTitles.has(t)) return false;
+      const base = stripSegment(t);
+      if (base !== t && (focusDoneTitles.has(base) || completedTasks.has(base))) return false;
+      return true;
+    };
     if (activeBlock) {
       const remaining = activeBlock.tasks.find(isAvailable);
       if (remaining) {
@@ -128,7 +139,12 @@ export function CompactNextUp({ date, onSeePlan, onExpand, onDismiss, onReflect 
   // Exclude tasks completed via planner goals OR via a focus session (which
   // only updates tasks.status, not daily_plan_goals.status).
   const revisitable = useMemo(() => {
-    return Array.from(movedOn).filter((t) => !completedTasks.has(t) && !focusDoneTitles.has(t));
+    return Array.from(movedOn).filter((t) => {
+      if (completedTasks.has(t) || focusDoneTitles.has(t)) return false;
+      const base = stripSegment(t);
+      if (base !== t && (focusDoneTitles.has(base) || completedTasks.has(base))) return false;
+      return true;
+    });
   }, [movedOn, completedTasks, focusDoneTitles]);
 
   // Refresh today's completed sessions whenever:
@@ -148,8 +164,16 @@ export function CompactNextUp({ date, onSeePlan, onExpand, onDismiss, onReflect 
         const doneTitles = new Set(r.sessions.filter((s) => s.outcome === 'completed').map((s) => s.taskTitle));
         setFocusDoneTitles(doneTitles);
         // If the pre-break snapshot is now known-done, drop it so the card
-        // falls through to the freshly-computed `next`.
-        setPendingNext((prev) => (prev && doneTitles.has(prev.title) ? null : prev));
+        // falls through to the freshly-computed `next`. Also compare the
+        // stripped (segment-free) title so "Foo — Part 2/4" is hidden once
+        // "Foo" has been completed.
+        setPendingNext((prev) => {
+          if (!prev) return prev;
+          if (doneTitles.has(prev.title)) return null;
+          const base = stripSegment(prev.title);
+          if (base !== prev.title && doneTitles.has(base)) return null;
+          return prev;
+        });
       })
       .catch(() => { /* non-critical */ });
     return () => { cancelled = true; };
@@ -171,9 +195,17 @@ export function CompactNextUp({ date, onSeePlan, onExpand, onDismiss, onReflect 
       const msg = e instanceof Error ? e.message : '';
       if (msg.startsWith('TASK_ALREADY_DONE: ')) {
         // Task truly is already marked done — safe to hide and recompute so
-        // the next-up card moves on to the next available item.
+        // the next-up card moves on to the next available item. Add both the
+        // decorated and stripped base title so *every* remaining segment of
+        // the same parent is filtered out at once.
         const badTitle = msg.slice('TASK_ALREADY_DONE: '.length);
-        setFocusDoneTitles((prev) => new Set([...prev, badTitle]));
+        const base = stripSegment(badTitle);
+        setFocusDoneTitles((prev) => {
+          const next = new Set(prev);
+          next.add(badTitle);
+          if (base !== badTitle) next.add(base);
+          return next;
+        });
         setPendingNext(null);
         setResting(false);
         setRestLeft(REST_SECONDS);
