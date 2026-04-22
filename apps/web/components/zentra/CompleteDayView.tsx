@@ -4,33 +4,73 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api-client';
 
+interface SuggestedTask {
+  id: string;
+  title: string;
+  nextAction?: string | null;
+  nextActionState?: 'unclear' | 'set' | 'done';
+}
+
 interface CompleteDayViewProps {
   completedCount: number;
   totalMinutes: number;
   onAddAnother: () => void;
+  onStartSuggested?: (task: SuggestedTask) => void;
 }
 
-export function CompleteDayView({ completedCount, totalMinutes, onAddAnother }: CompleteDayViewProps) {
+export function CompleteDayView({ completedCount, totalMinutes, onAddAnother, onStartSuggested }: CompleteDayViewProps) {
   const router = useRouter();
   const [nextTitle, setNextTitle] = useState<string | null>(null);
+  const [nextTask, setNextTask] = useState<SuggestedTask | null>(null);
+  const [priming, setPriming] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const res = await api<{
-          suggestion: { title: string } | null;
+          suggestion: SuggestedTask | null;
           suggestionText?: string | null;
         }>('/priority/suggest', { method: 'POST' });
         if (cancelled) return;
+        setNextTask(res.suggestion ?? null);
         const title = res.suggestion?.title ?? res.suggestionText ?? null;
         setNextTitle(title);
       } catch {
-        if (!cancelled) setNextTitle(null);
+        if (!cancelled) {
+          setNextTask(null);
+          setNextTitle(null);
+        }
       }
     })();
     return () => { cancelled = true; };
   }, []);
+
+  async function handleNextUpClick() {
+    if (priming) return;
+    if (nextTask?.id && onStartSuggested) {
+      setPriming(true);
+      try {
+        await api('/priority/today', {
+          method: 'POST',
+          body: JSON.stringify({ taskId: nextTask.id }),
+        });
+        onStartSuggested({
+          id: nextTask.id,
+          title: nextTask.title,
+          nextAction: nextTask.nextAction ?? null,
+          nextActionState: nextTask.nextActionState ?? 'unclear',
+        });
+      } catch {
+        // Fall back to the chooser if priming failed
+        onAddAnother();
+      } finally {
+        setPriming(false);
+      }
+      return;
+    }
+    onAddAnother();
+  }
 
   // Detect whether we're inside the detached mini-working popup. When so,
   // navigate the opener window and close this one instead of routing in-place.
@@ -83,7 +123,8 @@ export function CompleteDayView({ completedCount, totalMinutes, onAddAnother }: 
       {nextTitle && (
         <button
           type="button"
-          onClick={onAddAnother}
+          onClick={handleNextUpClick}
+          disabled={priming}
           style={{
             width: '100%',
             padding: '20px 20px',

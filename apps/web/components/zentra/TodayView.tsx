@@ -239,6 +239,15 @@ export function TodayView() {
           setPriority(null);
           setState('empty');
         }}
+        onStartSuggested={(task) => {
+          setPriority({
+            id: task.id,
+            title: task.title,
+            nextAction: task.nextAction ?? null,
+            nextActionState: task.nextActionState ?? 'unclear',
+          });
+          setState('primed');
+        }}
       />
     );
   }
