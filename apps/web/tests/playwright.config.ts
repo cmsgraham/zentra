@@ -10,17 +10,16 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
-    storageState: 'auth.json',
   },
   projects: [
     {
       name: 'setup',
       testMatch: /.*\.setup\.ts/,
-      use: { ...devices['Desktop Chrome'], storageState: undefined },
+      use: { ...devices['Desktop Chrome'] },
     },
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: { ...devices['Desktop Chrome'], storageState: 'auth.json' },
       dependencies: ['setup'],
     },
   ],
