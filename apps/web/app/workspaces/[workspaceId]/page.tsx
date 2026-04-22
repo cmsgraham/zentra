@@ -196,13 +196,16 @@ export default function WorkspaceBoardPage() {
     }
 
     moveTasksBulk(idsToMove, newStatus);
+    if (selectionMode && idsToMove.length > 1) exitSelection();
   }
 
   function handleBlockedConfirm() {
     if (!pendingDrop || !blockedReason.trim()) return;
+    const wasMulti = pendingDrop.taskIds.length > 1;
     moveTasksBulk(pendingDrop.taskIds, pendingDrop.status, { blockedReason: blockedReason.trim() });
     setPendingDrop(null);
     setBlockedReason('');
+    if (selectionMode && wasMulti) exitSelection();
   }
 
   const toggleLane = (status: string) => {
