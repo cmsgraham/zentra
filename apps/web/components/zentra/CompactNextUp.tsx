@@ -79,7 +79,7 @@ function formatMs(seconds: number): string {
 
 export function CompactNextUp({ date, onSeePlan, onExpand, onDismiss, onReflect }: Props) {
   const { state, derived } = useWorkingSession(date, true);
-  const { completedTasks, loaded, blocks } = state;
+  const { completedTasks, loaded, blocks, goals } = state;
   const { activeBlock, activeBlockIndex } = derived;
 
   const startByTitle = useFocusStore((s) => s.startByTitle);
@@ -132,8 +132,31 @@ export function CompactNextUp({ date, onSeePlan, onExpand, onDismiss, onReflect 
         return { title: upcoming, minutes: 25, from: 'next' };
       }
     }
+    // Also scan earlier work blocks — the plan day isn't strictly linear and
+    // a task from an earlier block may still be pending (e.g. user started
+    // mid-day). Without this, the card shows "Plan cleared" while the plan
+    // still has open items.
+    for (let i = 0; i < startIdx && i < blocks.length; i++) {
+      const b = blocks[i];
+      if (b.type === 'break') continue;
+      const upcoming = b.tasks.find(isAvailable);
+      if (upcoming) {
+        return { title: upcoming, minutes: 25, from: 'next' };
+      }
+    }
+    // Fallback: plan blocks exhausted (or empty). Use today's goals so the
+    // flow keeps rolling even when planBlocks are thin or missing.
+    for (const g of goals) {
+      if (g.status !== 'pending') continue;
+      if (g.linkedTask?.status === 'done') continue;
+      const cleanTitle = g.title.replace(/^\[\d{2}:\d{2}\]\s*/, '');
+      if (!cleanTitle) continue;
+      if (isAvailable(cleanTitle)) {
+        return { title: cleanTitle, minutes: 25, from: 'next' };
+      }
+    }
     return null;
-  }, [activeBlock, activeBlockIndex, blocks, completedTasks, movedOn, focusDoneTitles]);
+  }, [activeBlock, activeBlockIndex, blocks, goals, completedTasks, movedOn, focusDoneTitles]);
 
   // Moved-on tasks that haven't been completed later — available to revisit.
   // Exclude tasks completed via planner goals OR via a focus session (which
