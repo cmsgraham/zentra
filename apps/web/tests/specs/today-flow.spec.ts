@@ -1,22 +1,16 @@
 import { test, expect, Page } from '@playwright/test';
+import { getSession, resetToday, seedPrimedUnclear, seedPlanBlocks, seedCompleteState, SeedSession } from './helpers/seed';
 
 /**
  * Zentra /today flow regression tests.
  *
- * These cover automatable sections of docs/today_flow_test_plan.md:
- *  - §1 Loading → state routing (sanity)
- *  - §2 Error state
- *  - §7 PlannerWorking recovery
- *  - §8 Modal dismiss / cancel edges
- *  - §9 Regression happy paths
- *
- * Sections that require manual intervention (real timer waits, no-workspace
- * account, fourth-extension flow) are marked test.skip with a reason.
+ * State is seeded via the API before each describe block so we can exercise
+ * mutually-exclusive /today states (Primed / Complete / Working plan) from a
+ * single shared test account.
  */
 
 async function goToToday(page: Page) {
   await page.goto('/today');
-  // Loading spinner should clear and land on one of the known states
   await expect(page.locator('body')).not.toContainText('Loading...', { timeout: 10000 });
 }
 
@@ -32,15 +26,12 @@ test.describe('§1 Loading → state routing', () => {
 
     await goToToday(page);
 
-    // We should still be on /today (not redirected to /login)
     await expect(page).toHaveURL(/\/today/);
 
-    // Page has rendered something beyond the loading spinner
     const bodyText = await page.locator('body').innerText();
     expect(bodyText.length, 'Body text should not be empty').toBeGreaterThan(10);
     expect(bodyText).not.toMatch(/^Loading\.\.\.\s*$/);
 
-    // No hard React/console errors (ignore third-party noise + expected 401/404)
     const hardErrors = consoleErrors.filter(
       (e) => !/DevTools|Download the React|Warning:|Failed to load resource|401|404|net::ERR/i.test(e),
     );
@@ -49,19 +40,14 @@ test.describe('§1 Loading → state routing', () => {
 });
 
 // -------------------------------------------------------------------
-// §2 Error state (FIX #10)
+// §2 Error state (FIX #10) — best-effort offline simulation
 // -------------------------------------------------------------------
 test.describe('§2 Error state', () => {
   test('2.1 offline load shows Error UI with Retry + Close the day', async ({ page, context }) => {
-    await context.setOffline(true);
-    await page.goto('/today').catch(() => {});
-    // The page shell may 404 while offline; re-enable and navigate to trigger client fetch failure
-    await context.setOffline(false);
     await page.goto('/today');
     await context.setOffline(true);
     await page.reload().catch(() => {});
 
-    // If navigation itself failed, the client error UI can't render — skip gracefully
     const body = await page.locator('body').innerText().catch(() => '');
     test.skip(!body.includes("Something's off"), 'Client shell could not load while offline; manual test required');
 
@@ -73,7 +59,6 @@ test.describe('§2 Error state', () => {
   });
 
   test('2.4 Close-the-day from Error routes to /planner', async ({ page, context }) => {
-    // Same caveat as 2.1: we try best-effort
     await page.goto('/today');
     await context.setOffline(true);
     await page.reload().catch(() => {});
@@ -88,46 +73,53 @@ test.describe('§2 Error state', () => {
 });
 
 // -------------------------------------------------------------------
-// §7 PlannerWorking recovery (FIX #2)
+// §7 PlannerWorking recovery (FIX #2) — seeds plan_blocks for today
 // -------------------------------------------------------------------
 test.describe('§7 PlannerWorking recovery', () => {
+  let session: SeedSession;
+  test.beforeAll(async () => {
+    session = await getSession();
+    await seedPlanBlocks(session);
+  });
+
   test('7.1 Back to Today button visible in /planner/working', async ({ page }) => {
     await page.goto('/planner/working');
     await page.waitForLoadState('networkidle').catch(() => {});
 
     const backBtn = page.getByRole('button', { name: /back to today/i });
-    const visible = await backBtn.isVisible().catch(() => false);
-    // If no plan exists the WorkingMode header isn't rendered — skip instead of fail
-    test.skip(!visible, 'Back to Today not visible (likely no plan for today)');
-    await expect(backBtn).toBeVisible();
+    await expect(backBtn).toBeVisible({ timeout: 10000 });
   });
 
   test('7.2 Clicking Back to Today navigates to /today', async ({ page }) => {
     await page.goto('/planner/working');
+    await page.waitForLoadState('networkidle').catch(() => {});
+
     const backBtn = page.getByRole('button', { name: /back to today/i });
-    if (!(await backBtn.isVisible().catch(() => false))) {
-      test.skip(true, 'No plan for today');
-    }
+    await expect(backBtn).toBeVisible({ timeout: 10000 });
     await backBtn.click();
     await expect(page).toHaveURL(/\/today$/);
   });
 });
 
 // -------------------------------------------------------------------
-// §8 Modal dismiss / cancel edges
+// §8 Modal dismiss / cancel edges — seeds Primed + unclear next action
 // -------------------------------------------------------------------
 test.describe('§8 Modal dismiss edges', () => {
+  let session: SeedSession;
+  test.beforeAll(async () => {
+    session = await getSession();
+    await seedPrimedUnclear(session);
+  });
+
   test('8.4 Save button disabled when NextActionInput empty', async ({ page }) => {
     await goToToday(page);
-    // Only runs if we're in Primed with unclear next action
     const input = page.getByPlaceholder(/next action|what.s the next/i);
     if (!(await input.isVisible().catch(() => false))) {
-      test.skip(true, 'Not in Primed + unclear state; NextActionInput not visible');
+      test.skip(true, 'NextActionInput not rendered in current Primed layout');
     }
 
     await input.fill('');
     const saveBtn = page.getByRole('button', { name: /^save$/i });
-    // Save button is rendered conditionally when text.trim() is truthy; should be absent/disabled
     const visible = await saveBtn.isVisible().catch(() => false);
     const disabled = visible ? await saveBtn.isDisabled() : true;
     expect(disabled).toBe(true);
@@ -135,15 +127,25 @@ test.describe('§8 Modal dismiss edges', () => {
 });
 
 // -------------------------------------------------------------------
-// §9 Regression — existing happy paths
+// §9 Regression — Complete-state happy paths — seeds Complete state
 // -------------------------------------------------------------------
 test.describe('§9 Regression happy paths', () => {
+  let session: SeedSession;
+  test.beforeAll(async () => {
+    session = await getSession();
+    await seedCompleteState(session);
+  });
+
+  // Re-seed before each test so a previous action (e.g. clicking "Add another
+  // intention") doesn't leave the account out of Complete state.
+  test.beforeEach(async () => {
+    await seedCompleteState(session);
+  });
+
   test('9.7 Complete → Add another intention → Empty', async ({ page }) => {
     await goToToday(page);
     const addBtn = page.getByRole('button', { name: /add another intention/i });
-    if (!(await addBtn.isVisible().catch(() => false))) {
-      test.skip(true, 'Not in Complete state');
-    }
+    await expect(addBtn).toBeVisible({ timeout: 10000 });
     await addBtn.click();
     await expect(page.getByText("What's the one thing today")).toBeVisible();
   });
@@ -151,9 +153,7 @@ test.describe('§9 Regression happy paths', () => {
   test('9.8 Complete → Reflect on today → /reflect', async ({ page }) => {
     await goToToday(page);
     const reflectBtn = page.getByRole('button', { name: /reflect on today/i });
-    if (!(await reflectBtn.isVisible().catch(() => false))) {
-      test.skip(true, 'Not in Complete state');
-    }
+    await expect(reflectBtn).toBeVisible({ timeout: 10000 });
     await reflectBtn.click();
     await expect(page).toHaveURL(/\/reflect/);
   });
@@ -161,11 +161,13 @@ test.describe('§9 Regression happy paths', () => {
   test('9.9 Complete → Close the day → /planner', async ({ page }) => {
     await goToToday(page);
     const closeBtn = page.getByRole('button', { name: /close the day/i });
-    if (!(await closeBtn.isVisible().catch(() => false))) {
-      test.skip(true, 'Not in Complete state');
-    }
+    await expect(closeBtn).toBeVisible({ timeout: 10000 });
     await closeBtn.click();
     await expect(page).toHaveURL(/\/planner$/);
+  });
+
+  test.afterAll(async () => {
+    if (session) await resetToday(session);
   });
 });
 
