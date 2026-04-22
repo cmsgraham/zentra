@@ -81,7 +81,9 @@ export function CompleteDayView({ completedCount, totalMinutes, onAddAnother }: 
       </div>
 
       {nextTitle && (
-        <div
+        <button
+          type="button"
+          onClick={onAddAnother}
           style={{
             width: '100%',
             padding: '20px 20px',
@@ -89,31 +91,59 @@ export function CompleteDayView({ completedCount, totalMinutes, onAddAnother }: 
             border: '1px solid var(--ink-border)',
             borderRadius: '14px',
             textAlign: 'left',
+            cursor: 'pointer',
+            font: 'inherit',
+            color: 'inherit',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            transition: 'background 120ms ease, border-color 120ms ease',
           }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = 'var(--ink-surface-hover, var(--ink-surface))';
+            e.currentTarget.style.borderColor = 'var(--ink-text-muted)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'var(--ink-surface)';
+            e.currentTarget.style.borderColor = 'var(--ink-border)';
+          }}
+          aria-label={`Start next task: ${nextTitle}`}
         >
-          <div
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div
+              style={{
+                fontSize: '0.6875rem',
+                fontWeight: 600,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+                color: 'var(--ink-text-muted)',
+                marginBottom: '6px',
+              }}
+            >
+              Next up
+            </div>
+            <div
+              style={{
+                fontSize: '1.0625rem',
+                fontWeight: 500,
+                color: 'var(--ink-text)',
+                lineHeight: 1.35,
+              }}
+            >
+              {nextTitle}
+            </div>
+          </div>
+          <span
+            aria-hidden
             style={{
-              fontSize: '0.6875rem',
-              fontWeight: 600,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
+              fontSize: '1.125rem',
               color: 'var(--ink-text-muted)',
-              marginBottom: '6px',
+              lineHeight: 1,
             }}
           >
-            Next up
-          </div>
-          <div
-            style={{
-              fontSize: '1.0625rem',
-              fontWeight: 500,
-              color: 'var(--ink-text)',
-              lineHeight: 1.35,
-            }}
-          >
-            {nextTitle}
-          </div>
-        </div>
+            ›
+          </span>
+        </button>
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '18px', width: '100%', alignItems: 'center' }}>
