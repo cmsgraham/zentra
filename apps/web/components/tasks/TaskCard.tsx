@@ -24,6 +24,8 @@ interface Props {
   onToggleSelect?: (taskId: string) => void;
   selected?: boolean;
   isDragOverlay?: boolean;
+  /** When true, visually dim this card (e.g. it's part of a multi-drag selection). */
+  dimmed?: boolean;
 }
 
 function formatDate(dateStr: string): string {
@@ -37,7 +39,7 @@ function formatDate(dateStr: string): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-export default function TaskCard({ task, onClick, onToggleDone, onToggleSelect, selected, isDragOverlay }: Props) {
+export default function TaskCard({ task, onClick, onToggleDone, onToggleSelect, selected, isDragOverlay, dimmed }: Props) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: task.id,
     data: { task },
@@ -51,7 +53,7 @@ export default function TaskCard({ task, onClick, onToggleDone, onToggleSelect, 
 
   const style: React.CSSProperties = {
     transform: CSS.Translate.toString(transform),
-    opacity: isDragging ? 0.3 : 1,
+    opacity: isDragging || dimmed ? 0.3 : 1,
     ...(isDragOverlay ? { background: 'var(--ink-surface)', boxShadow: '0 4px 16px rgba(0,0,0,0.10)', borderRadius: '8px', padding: '12px 14px' } : {}),
     ...(selected ? { outline: '2px solid var(--ink-accent, #3b82f6)', outlineOffset: '-2px', borderRadius: '8px' } : {}),
   };

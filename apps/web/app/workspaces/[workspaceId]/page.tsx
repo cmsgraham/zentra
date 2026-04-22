@@ -69,7 +69,7 @@ export default function WorkspaceBoardPage() {
   }, []);
 
   // Blocked-reason prompt state
-  const [pendingDrop, setPendingDrop] = useState<{ taskId: string; status: string } | null>(null);
+  const [pendingDrop, setPendingDrop] = useState<{ taskIds: string[]; status: string } | null>(null);
   const [blockedReason, setBlockedReason] = useState('');
 
   const sensors = useSensors(
@@ -117,9 +117,24 @@ export default function WorkspaceBoardPage() {
   const filteredByStatus = (status: string) => filteredTasks.filter((t) => t.status === status);
   const hasActiveFilters = !!(search.trim() || priorityFilter || assigneeFilter);
 
+  // While actively dragging a multi-selected card, dim its siblings (not the
+  // actively-dragged card itself — dnd-kit already dims that one).
+  const dimmedIds: Set<string> | undefined = (() => {
+    if (!activeTask || !selectionMode) return undefined;
+    if (!selectedIds.has(activeTask.id) || selectedIds.size <= 1) return undefined;
+    const s = new Set(selectedIds);
+    s.delete(activeTask.id);
+    return s;
+  })();
+
   function handleDragStart(event: DragStartEvent) {
     const task = (event.active.data.current as { task: TaskData })?.task;
     setActiveTask(task ?? null);
+    // If the dragged task isn't part of the current selection, treat drag as
+    // a single-task drag (don't also move unrelated selected items).
+    if (selectionMode && task && !selectedIds.has(task.id)) {
+      // Leave the selection alone; handleDragEnd will fall back to single-task move.
+    }
   }
 
   async function moveTask(taskId: string, newStatus: string, extra?: Record<string, string>) {
@@ -133,28 +148,59 @@ export default function WorkspaceBoardPage() {
     }
   }
 
+  async function moveTasksBulk(taskIds: string[], newStatus: string, extra?: Record<string, string>) {
+    if (taskIds.length === 0) return;
+    if (taskIds.length === 1) return moveTask(taskIds[0], newStatus, extra);
+
+    const idSet = new Set(taskIds);
+    // Optimistic update across the selection
+    setTasks((prev) => prev.map((t) => (idSet.has(t.id) ? { ...t, status: newStatus, ...extra } : t)));
+    try {
+      await api('/tasks/bulk', {
+        method: 'PATCH',
+        body: { taskIds, updates: { status: newStatus, ...(extra || {}) } },
+      });
+    } catch {
+      await loadTasks();
+    }
+  }
+
   function handleDragEnd(event: DragEndEvent) {
     setActiveTask(null);
     const { active, over } = event;
     if (!over) return;
 
-    const taskId = active.id as string;
+    const draggedId = active.id as string;
     const newStatus = over.id as string;
-    const task = tasks.find((t) => t.id === taskId);
-    if (!task || task.status === newStatus) return;
+    const dragged = tasks.find((t) => t.id === draggedId);
+    if (!dragged) return;
+
+    // If the dragged task is part of a multi-selection, move the whole set.
+    // Otherwise just move the single task.
+    const dragIds = selectionMode && selectedIds.has(draggedId)
+      ? Array.from(selectedIds)
+      : [draggedId];
+
+    // Filter out tasks already in the target status (no-op) but allow the
+    // multi-drop even if `dragged` itself is already there and others aren't.
+    const idsToMove = dragIds.filter((id) => {
+      const t = tasks.find((x) => x.id === id);
+      return t && t.status !== newStatus;
+    });
+    if (idsToMove.length === 0) return;
 
     if (newStatus === 'blocked') {
-      setPendingDrop({ taskId, status: newStatus });
+      setPendingDrop({ taskIds: idsToMove, status: newStatus });
       setBlockedReason('');
       return;
     }
 
-    moveTask(taskId, newStatus);
+    moveTasksBulk(idsToMove, newStatus);
   }
 
   function handleBlockedConfirm() {
     if (!pendingDrop || !blockedReason.trim()) return;
-    moveTask(pendingDrop.taskId, pendingDrop.status, { blockedReason: blockedReason.trim() });
+    moveTasksBulk(pendingDrop.taskIds, pendingDrop.status, { blockedReason: blockedReason.trim() });
     setPendingDrop(null);
     setBlockedReason('');
   }
@@ -334,6 +380,7 @@ export default function WorkspaceBoardPage() {
                             onQuickAdd={lane.status === 'pending' ? handleQuickAdd : undefined}
                             onToggleSelect={selectionMode ? toggleSelect : undefined}
                             selectedIds={selectionMode ? selectedIds : undefined}
+                            dimmedIds={dimmedIds}
                             mobile
                           />
                         )}
@@ -342,7 +389,24 @@ export default function WorkspaceBoardPage() {
                   })}
                 </div>
                 <DragOverlay>
-                  {activeTask ? <TaskCard task={activeTask} isDragOverlay /> : null}
+                  {activeTask ? (
+                    <div style={{ position: 'relative' }}>
+                      <TaskCard task={activeTask} isDragOverlay />
+                      {selectionMode && selectedIds.has(activeTask.id) && selectedIds.size > 1 && (
+                        <span
+                          style={{
+                            position: 'absolute', top: -8, right: -8,
+                            background: 'var(--ink-accent, #3b82f6)', color: 'white',
+                            borderRadius: '999px', padding: '2px 8px',
+                            fontSize: '0.75rem', fontWeight: 600,
+                            boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
+                          }}
+                        >
+                          {selectedIds.size}
+                        </span>
+                      )}
+                    </div>
+                  ) : null}
                 </DragOverlay>
               </DndContext>
             </div>
@@ -363,11 +427,29 @@ export default function WorkspaceBoardPage() {
                       onQuickAdd={lane.status === 'pending' ? handleQuickAdd : undefined}
                       onToggleSelect={selectionMode ? toggleSelect : undefined}
                       selectedIds={selectionMode ? selectedIds : undefined}
+                      dimmedIds={dimmedIds}
                     />
                   ))}
                 </div>
                 <DragOverlay>
-                  {activeTask ? <TaskCard task={activeTask} isDragOverlay /> : null}
+                  {activeTask ? (
+                    <div style={{ position: 'relative' }}>
+                      <TaskCard task={activeTask} isDragOverlay />
+                      {selectionMode && selectedIds.has(activeTask.id) && selectedIds.size > 1 && (
+                        <span
+                          style={{
+                            position: 'absolute', top: -8, right: -8,
+                            background: 'var(--ink-accent, #3b82f6)', color: 'white',
+                            borderRadius: '999px', padding: '2px 8px',
+                            fontSize: '0.75rem', fontWeight: 600,
+                            boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
+                          }}
+                        >
+                          {selectedIds.size}
+                        </span>
+                      )}
+                    </div>
+                  ) : null}
                 </DragOverlay>
               </DndContext>
             </div>
@@ -431,11 +513,19 @@ export default function WorkspaceBoardPage() {
             onSubmit={(e) => { e.preventDefault(); handleBlockedConfirm(); }}
             className="w-full max-w-sm p-6 space-y-4 z-overlay z-animate-in"
           >
-            <h2 className="text-base font-semibold">Why is this intention blocked?</h2>
+            <h2 className="text-base font-semibold">
+              {pendingDrop.taskIds.length > 1
+                ? `Why are these ${pendingDrop.taskIds.length} intentions blocked?`
+                : 'Why is this intention blocked?'}
+            </h2>
             <input
               value={blockedReason}
               onChange={(e) => setBlockedReason(e.target.value)}
-              placeholder="Describe what's blocking this intention…"
+              placeholder={
+                pendingDrop.taskIds.length > 1
+                  ? 'Same reason will apply to all…'
+                  : "Describe what's blocking this intention…"
+              }
               required
               autoFocus
               className="z-input"

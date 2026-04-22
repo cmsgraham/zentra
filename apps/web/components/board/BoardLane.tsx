@@ -14,10 +14,12 @@ interface Props {
   onQuickAdd?: (title: string) => Promise<void>;
   onToggleSelect?: (taskId: string) => void;
   selectedIds?: Set<string>;
+  /** Task ids to visually dim (e.g. multi-drag siblings). */
+  dimmedIds?: Set<string>;
   mobile?: boolean;
 }
 
-export default function BoardLane({ title, status, tasks, color, onTaskClick, onToggleDone, onQuickAdd, onToggleSelect, selectedIds, mobile }: Props) {
+export default function BoardLane({ title, status, tasks, color, onTaskClick, onToggleDone, onQuickAdd, onToggleSelect, selectedIds, dimmedIds, mobile }: Props) {
   const { setNodeRef, isOver } = useDroppable({ id: status });
   const [quickTitle, setQuickTitle] = useState('');
   const [adding, setAdding] = useState(false);
@@ -100,6 +102,7 @@ export default function BoardLane({ title, status, tasks, color, onTaskClick, on
             onToggleDone={onToggleDone}
             onToggleSelect={onToggleSelect}
             selected={selectedIds?.has(task.id)}
+            dimmed={dimmedIds?.has(task.id)}
           />
         ))}
         {tasks.length === 0 && (
