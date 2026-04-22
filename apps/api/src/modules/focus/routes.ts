@@ -144,14 +144,56 @@ export default async function focusRoutes(app: FastifyInstance) {
     );
     if (result.rows.length === 0) throw new NotFoundError('Active session not found');
 
-    // Mark the task as done
     const taskId = result.rows[0].task_id;
-    await app.pg.query(
-      `UPDATE tasks
-       SET status = 'done', completed_at = now(), next_action_state = 'done'
-       WHERE id = $1 AND status != 'done'`,
+
+    // If the task has segments, mark only the next pending segment done.
+    // The parent is auto-marked done once every segment is complete. This
+    // lets a user run N focus sessions — one per segment — without the
+    // first completion locking out the rest.
+    const segCount = await app.pg.query(
+      `SELECT count(*)::int AS total,
+              count(*) FILTER (WHERE status = 'done')::int AS done
+       FROM task_segments WHERE parent_task_id = $1`,
       [taskId],
     );
+    const total = segCount.rows[0]?.total ?? 0;
+    const done = segCount.rows[0]?.done ?? 0;
+
+    if (total > 0) {
+      // Advance the first pending segment.
+      const next = await app.pg.query(
+        `SELECT id FROM task_segments
+         WHERE parent_task_id = $1 AND status != 'done'
+         ORDER BY sequence_number ASC
+         LIMIT 1`,
+        [taskId],
+      );
+      if (next.rows.length > 0) {
+        await app.pg.query(
+          `UPDATE task_segments
+           SET status = 'done', completed_at = now(), updated_at = now()
+           WHERE id = $1`,
+          [next.rows[0].id],
+        );
+        // If this was the last segment, also flip the parent task to done.
+        if (done + 1 >= total) {
+          await app.pg.query(
+            `UPDATE tasks
+             SET status = 'done', completed_at = now(), next_action_state = 'done'
+             WHERE id = $1 AND status != 'done'`,
+            [taskId],
+          );
+        }
+      }
+    } else {
+      // No segments — mark the whole task done as before.
+      await app.pg.query(
+        `UPDATE tasks
+         SET status = 'done', completed_at = now(), next_action_state = 'done'
+         WHERE id = $1 AND status != 'done'`,
+        [taskId],
+      );
+    }
 
     return reply.status(200).send({ session: formatSession(result.rows[0]) });
   });

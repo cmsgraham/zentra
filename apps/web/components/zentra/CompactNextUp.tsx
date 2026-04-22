@@ -112,8 +112,6 @@ export function CompactNextUp({ date, onSeePlan, onExpand, onDismiss, onReflect 
   const next = useMemo<{ title: string; minutes: number; from: 'current' | 'next' } | null>(() => {
     const isAvailable = (t: string) => {
       if (completedTasks.has(t) || movedOn.has(t) || focusDoneTitles.has(t)) return false;
-      const base = stripSegment(t);
-      if (base !== t && (focusDoneTitles.has(base) || completedTasks.has(base))) return false;
       return true;
     };
     if (activeBlock) {
@@ -164,8 +162,6 @@ export function CompactNextUp({ date, onSeePlan, onExpand, onDismiss, onReflect 
   const revisitable = useMemo(() => {
     return Array.from(movedOn).filter((t) => {
       if (completedTasks.has(t) || focusDoneTitles.has(t)) return false;
-      const base = stripSegment(t);
-      if (base !== t && (focusDoneTitles.has(base) || completedTasks.has(base))) return false;
       return true;
     });
   }, [movedOn, completedTasks, focusDoneTitles]);
@@ -222,11 +218,9 @@ export function CompactNextUp({ date, onSeePlan, onExpand, onDismiss, onReflect 
         // decorated and stripped base title so *every* remaining segment of
         // the same parent is filtered out at once.
         const badTitle = msg.slice('TASK_ALREADY_DONE: '.length);
-        const base = stripSegment(badTitle);
         setFocusDoneTitles((prev) => {
           const next = new Set(prev);
           next.add(badTitle);
-          if (base !== badTitle) next.add(base);
           return next;
         });
         setPendingNext(null);

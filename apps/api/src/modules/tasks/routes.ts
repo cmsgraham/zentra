@@ -952,6 +952,22 @@ export default async function taskRoutes(app: FastifyInstance) {
       );
       if (segResult.rows.length === 0) return { task: null };
       const t = segResult.rows[0];
+      // Heal legacy data: if the parent is marked done but still has pending
+      // segments (e.g. from before segment-aware focus completion), revive
+      // the parent so the remaining segments can actually run.
+      if (t.status === 'done') {
+        const pending = await app.pg.query(
+          `SELECT count(*)::int AS n FROM task_segments WHERE parent_task_id = $1 AND status != 'done'`,
+          [t.id],
+        );
+        if ((pending.rows[0]?.n ?? 0) > 0) {
+          await app.pg.query(
+            `UPDATE tasks SET status = 'pending', completed_at = NULL WHERE id = $1`,
+            [t.id],
+          );
+          t.status = 'pending';
+        }
+      }
       return {
         task: {
           id: t.id,
