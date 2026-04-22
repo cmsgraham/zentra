@@ -60,7 +60,7 @@ export function CompleteDayView({ completedCount, totalMinutes, onAddAnother }: 
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', width: '100%', alignItems: 'center' }}>
         <button
-          onClick={() => navigate('/reflect')}
+          onClick={onAddAnother}
           style={{
             width: '100%',
             padding: '14px',
@@ -73,10 +73,10 @@ export function CompleteDayView({ completedCount, totalMinutes, onAddAnother }: 
             cursor: 'pointer',
           }}
         >
-          Close the day
+          Start next task
         </button>
         <button
-          onClick={onAddAnother}
+          onClick={() => navigate('/reflect')}
           style={{
             padding: '4px 8px',
             background: 'transparent',
@@ -88,7 +88,7 @@ export function CompleteDayView({ completedCount, totalMinutes, onAddAnother }: 
             textUnderlineOffset: '3px',
           }}
         >
-          Not done yet — add another intention
+          Finish day & reflect
         </button>
       </div>
     </div>

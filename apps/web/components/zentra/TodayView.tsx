@@ -193,7 +193,7 @@ export function TodayView() {
               cursor: 'pointer',
             }}
           >
-            Close the day
+            Back to planner
           </button>
         </div>
       </div>
