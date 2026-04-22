@@ -285,13 +285,20 @@ export function TodayView() {
         )}
       </div>
 
-      {/* If next action is unclear, show the input */}
+      {/* If next action is unclear, show the input — but also allow starting right away */}
       {(!priority?.nextAction || priority.nextActionState === 'unclear') && priority ? (
-        <NextActionInput
-          taskId={priority.id}
-          value={priority.nextAction}
-          onSave={handleNextActionSave}
-        />
+        <>
+          <NextActionInput
+            taskId={priority.id}
+            value={priority.nextAction}
+            onSave={handleNextActionSave}
+          />
+          <StartButton
+            onClick={handleStartSession}
+            loading={startLoading}
+            plannedMinutes={defaultSession}
+          />
+        </>
       ) : (
         <StartButton
           onClick={handleStartSession}
