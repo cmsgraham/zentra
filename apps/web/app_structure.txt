@@ -1,0 +1,21 @@
+apps/web/
+  app/
+    layout.tsx
+    page.tsx
+    login/page.tsx
+    signup/page.tsx
+    workspaces/page.tsx
+    workspaces/[workspaceId]/page.tsx
+    workspaces/[workspaceId]/blocked/page.tsx
+    workspaces/[workspaceId]/archive/page.tsx
+    import/text/page.tsx
+    import/image/page.tsx
+  components/
+    board/
+    tasks/
+    ai/
+    layout/
+  lib/
+    api-client.ts
+    auth.ts
+    validators.ts

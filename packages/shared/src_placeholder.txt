@@ -1,0 +1,5 @@
+Create:
+packages/shared/src/index.ts
+packages/shared/src/types/task.ts
+packages/shared/src/types/ai.ts
+packages/shared/src/types/workspace.ts

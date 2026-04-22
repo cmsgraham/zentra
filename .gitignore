@@ -1,0 +1,24 @@
+node_modules
+.next
+dist
+build
+coverage
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+
+# Playwright
+apps/web/tests/node_modules/
+apps/web/tests/auth.json
+apps/web/tests/test-results/
+apps/web/tests/playwright-report/
+apps/web/tests/playwright/.cache/
+
+# TS incremental
+*.tsbuildinfo
+
+# Editor
+.vscode/
+.idea/

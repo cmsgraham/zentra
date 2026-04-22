@@ -1,0 +1,23 @@
+apps/api/src/
+  server.ts
+  app.ts
+  plugins/
+    auth.ts
+    db.ts
+  modules/
+    auth/
+    users/
+    workspaces/
+    invites/
+    tasks/
+    comments/
+    activity/
+    ai-import/
+    ai-suggestions/
+    embeddings/
+  lib/
+    env.ts
+    errors.ts
+    logger.ts
+  queue/
+    workers.ts

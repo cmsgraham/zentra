@@ -1,0 +1,23 @@
+usezentra.app {
+    handle_path /api/* {
+        reverse_proxy api:4000
+    }
+    reverse_proxy web:3000
+}
+
+# whatdahack CTF site — reverse proxy to CTFd container
+whatdahack.com, www.whatdahack.com {
+    encode gzip
+    reverse_proxy ctfd-ctfd-1:8000
+}
+
+# twitter.guru — tracking website
+twitter.guru {
+    encode gzip
+    reverse_proxy track-ip-website:3000
+}
+
+# Default fallback for direct-IP access or unknown hosts
+:80 {
+    reverse_proxy track-ip-website:3000
+}
