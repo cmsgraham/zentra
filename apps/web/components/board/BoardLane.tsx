@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useDroppable } from '@dnd-kit/core';
 import TaskCard, { type TaskData } from '../tasks/TaskCard';
 
@@ -23,6 +23,7 @@ export default function BoardLane({ title, status, tasks, color, onTaskClick, on
   const { setNodeRef, isOver } = useDroppable({ id: status });
   const [quickTitle, setQuickTitle] = useState('');
   const [adding, setAdding] = useState(false);
+  const quickInputRef = useRef<HTMLInputElement | null>(null);
 
   const tintMap: Record<string, string> = {
     pending: 'rgba(245, 158, 11, 0.04)',
@@ -76,19 +77,26 @@ export default function BoardLane({ title, status, tasks, color, onTaskClick, on
         {onQuickAdd && (
           <div className="px-1 pb-2">
             <input
+              ref={quickInputRef}
               value={quickTitle}
               onChange={(e) => setQuickTitle(e.target.value)}
               onKeyDown={async (e) => {
                 if (e.key === 'Enter' && quickTitle.trim() && !adding) {
                   e.preventDefault();
                   setAdding(true);
-                  await onQuickAdd(quickTitle.trim());
-                  setQuickTitle('');
-                  setAdding(false);
+                  try {
+                    await onQuickAdd(quickTitle.trim());
+                    setQuickTitle('');
+                  } finally {
+                    setAdding(false);
+                    // Restore focus so the user can keep typing next intentions
+                    // without reaching for the mouse.
+                    requestAnimationFrame(() => quickInputRef.current?.focus());
+                  }
                 }
               }}
               placeholder="+ Add intention…"
-              disabled={adding}
+              readOnly={adding}
               className="w-full text-xs bg-transparent outline-none px-2.5 py-2 rounded-lg"
               style={{ color: 'var(--ink-text)', border: '1px dashed var(--ink-border-subtle)', opacity: adding ? 0.5 : 1 }}
             />
