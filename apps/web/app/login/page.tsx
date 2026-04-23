@@ -201,6 +201,12 @@ function LoginInner() {
             </button>
           </form>
         )}
+
+        <p className="mt-6 text-center text-xs" style={{ color: 'var(--ink-text-muted)' }}>
+          <Link href="/legal/terms" className="underline">Terms</Link>
+          {' · '}
+          <Link href="/legal/privacy" className="underline">Privacy</Link>
+        </p>
       </div>
     </div>
   );

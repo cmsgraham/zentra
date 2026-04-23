@@ -124,6 +124,11 @@ export default function SignupPage() {
           >
             {submitting ? 'Creating account…' : 'Create account'}
           </button>
+          <p className="text-center text-xs" style={{ color: 'var(--ink-text-muted)' }}>
+            By creating an account you agree to our{' '}
+            <Link href="/legal/terms" className="underline">Terms</Link> and{' '}
+            <Link href="/legal/privacy" className="underline">Privacy Policy</Link>.
+          </p>
           <p className="text-center text-sm" style={{ color: 'var(--ink-text-muted)' }}>
             Already have an account?{' '}
             <Link href="/login" className="underline" style={{ color: 'var(--ink-accent)' }}>Sign in</Link>
