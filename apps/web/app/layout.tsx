@@ -12,6 +12,12 @@ export const metadata: Metadata = {
     shortcut: '/zentra_logo_azul.png',
     apple: '/zentra_logo_azul.png',
   },
+  // Google Search Console domain ownership verification.
+  // Set NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION in apps/web env to the token
+  // shown by Search Console (the value of the `content` attribute).
+  verification: {
+    google: process.env.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION || undefined,
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

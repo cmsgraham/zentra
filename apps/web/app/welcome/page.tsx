@@ -384,6 +384,28 @@ export default function WelcomePage() {
           <Sigil small />
           <span>Zentra · a calmer way to move forward</span>
         </div>
+        <div
+          style={{
+            marginTop: 12,
+            display: 'flex',
+            gap: 14,
+            justifyContent: 'center',
+            alignItems: 'center',
+            fontSize: '0.75rem',
+          }}
+        >
+          <Link href="/legal/privacy" style={{ color: 'var(--ink-text-muted)', textDecoration: 'underline' }}>
+            Privacy Policy
+          </Link>
+          <span aria-hidden style={{ color: 'var(--ink-text-faint)' }}>·</span>
+          <Link href="/legal/terms" style={{ color: 'var(--ink-text-muted)', textDecoration: 'underline' }}>
+            Terms of Service
+          </Link>
+          <span aria-hidden style={{ color: 'var(--ink-text-faint)' }}>·</span>
+          <a href="mailto:support@usezentra.app" style={{ color: 'var(--ink-text-muted)', textDecoration: 'underline' }}>
+            support@usezentra.app
+          </a>
+        </div>
       </footer>
     </div>
   );
