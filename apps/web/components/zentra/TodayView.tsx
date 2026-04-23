@@ -11,6 +11,7 @@ import { NextActionInput } from './NextActionInput';
 import { FocusSession } from './FocusSession';
 import { CompleteDayView } from './CompleteDayView';
 import { SoftUrgencyBadge } from './SoftUrgencyBadge';
+import { EchoesWidget } from './EchoesWidget';
 
 type TodayState = 'loading' | 'empty' | 'primed' | 'focused' | 'complete' | 'error';
 
@@ -323,6 +324,11 @@ export function TodayView() {
       >
         Change priority
       </button>
+
+      {/* Echoes widget */}
+      <div style={{ marginTop: '8px' }}>
+        <EchoesWidget />
+      </div>
     </div>
   );
 }

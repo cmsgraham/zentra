@@ -194,7 +194,7 @@ export default function RemindersPage() {
   return (
     <AuthShell>
       <div className="max-w-2xl mx-auto p-6 sm:p-8">
-        <h1 className="text-xl font-bold mb-6" style={{ color: 'var(--ink-text)' }}>Reminders</h1>
+        <h1 className="text-xl font-bold mb-6" style={{ color: 'var(--ink-text)' }}>Echoes</h1>
 
         {/* Create form */}
         <form onSubmit={handleCreate} className="rounded-xl p-4 mb-6" style={{ background: 'var(--ink-surface)', border: '1px solid var(--ink-border-subtle)' }}>
@@ -207,7 +207,7 @@ export default function RemindersPage() {
                 handleCreate(e);
               }
             }}
-            placeholder="Add a reminder… (press Enter)"
+            placeholder="Add an echo… (press Enter)"
             className="w-full text-sm bg-transparent outline-none mb-2"
             style={{ color: 'var(--ink-text)' }}
           />
@@ -258,7 +258,7 @@ export default function RemindersPage() {
         {/* My reminders */}
         {myReminders.length > 0 && (
           <div className="mb-6">
-            <p className="text-[11px] uppercase tracking-wider mb-2 font-semibold" style={{ color: 'var(--ink-text-muted)' }}>My Reminders</p>
+            <p className="text-[11px] uppercase tracking-wider mb-2 font-semibold" style={{ color: 'var(--ink-text-muted)' }}>My Echoes</p>
             <div className="flex flex-col gap-1.5">
               {myReminders.map((r) => (
                 <ReminderRow
@@ -299,13 +299,13 @@ export default function RemindersPage() {
 
         {filtered.length === 0 && (
           <p className="text-center text-sm py-10" style={{ color: 'var(--ink-text-muted)' }}>
-            {filter === 'active' ? 'No active reminders' : filter === 'completed' ? 'No completed reminders' : 'No reminders yet'}
+            {filter === 'active' ? 'No active echoes' : filter === 'completed' ? 'No completed echoes' : 'No echoes yet'}
           </p>
         )}
 
         {/* Edit modal */}
         {editId && (
-          <Modal onClose={() => setEditId(null)} title="Edit Reminder">
+          <Modal onClose={() => setEditId(null)} title="Edit Echo">
             <form onSubmit={handleUpdate} className="flex flex-col gap-3">
               <input
                 value={editTitle}
@@ -337,7 +337,7 @@ export default function RemindersPage() {
 
         {/* Share modal */}
         {shareReminderId && (
-          <Modal onClose={() => setShareReminderId(null)} title="Share Reminder">
+          <Modal onClose={() => setShareReminderId(null)} title="Share Echo">
             <form onSubmit={handleShare} className="flex gap-2 mb-4">
               <select
                 value={shareFriendId}

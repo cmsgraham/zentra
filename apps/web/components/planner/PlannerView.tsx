@@ -821,13 +821,15 @@ export default function PlannerView({ workspaceId, workspaceName }: PlannerViewP
       >
         {/* ── Navigation Bar ── */}
         <div className="flex items-center gap-3 mb-3">
-          <button
-            onClick={() => router.push(workspaceId ? `/workspaces/${workspaceId}` : '/workspaces')}
-            className="z-btn z-btn-ghost z-btn-sm"
-            style={{ color: 'var(--ink-accent)' }}
-          >
-            {workspaceId ? 'Intentions' : 'Studio'}
-          </button>
+          {workspaceId && (
+            <button
+              onClick={() => router.push(`/workspaces/${workspaceId}`)}
+              className="z-btn z-btn-ghost z-btn-sm"
+              style={{ color: 'var(--ink-accent)' }}
+            >
+              Intentions
+            </button>
+          )}
           {workspaceName && (
             <span className="text-xs font-medium" style={{ color: 'var(--ink-text-secondary)' }}>
               {workspaceName}

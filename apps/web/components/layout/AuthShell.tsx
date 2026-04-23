@@ -29,7 +29,7 @@ function getMobileTitle(pathname: string, workspaceName?: string): string {
   if (pathname.startsWith('/shopping/') && pathname !== '/shopping') return 'List';
   if (pathname === '/shopping') return 'Lists';
   if (pathname === '/friends') return 'Friends';
-  if (pathname === '/reminders') return 'Reminders';
+  if (pathname === '/reminders') return 'Echoes';
   if (pathname.includes('/planner')) return workspaceName || 'Canvas';
   if (pathname.includes('/blocked')) return 'Waiting on…';
   if (pathname.includes('/archive')) return 'Archive';
@@ -229,6 +229,13 @@ export default function AuthenticatedLayout({ children }: { children: React.Reac
             style={{ color: pathname.startsWith('/lists') || pathname.startsWith('/shopping') ? 'var(--ink-accent)' : 'var(--ink-text-muted)', fontSize: '0.8125rem' }}
           >
             Lists
+          </button>
+          <button
+            onClick={() => router.push('/reminders')}
+            className="z-btn-ghost z-btn-sm rounded-md"
+            style={{ color: pathname.startsWith('/reminders') ? 'var(--ink-accent)' : 'var(--ink-text-muted)', fontSize: '0.8125rem' }}
+          >
+            Echoes
           </button>
           <div className="w-px h-4 mx-1.5" style={{ background: 'var(--ink-border-subtle)' }} />
           <button

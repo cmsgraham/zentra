@@ -70,7 +70,7 @@ export default function MobileDrawer({ open, onClose, workspaces }: Props) {
           : []),
         { label: 'Lists', action: () => nav('/lists') },
         { label: 'Friends', action: () => nav('/friends') },
-        { label: 'Reminders', action: () => nav('/reminders') },
+        { label: 'Echoes', action: () => nav('/reminders') },
       ],
     },
   ];
