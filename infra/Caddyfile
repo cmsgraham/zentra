@@ -13,8 +13,10 @@ usezentra.app {
     handle_path /api/* {
         reverse_proxy api:4000
     }
-    @root path /
-    redir @root /welcome 302
+    # Note: do not redirect "/" here. Google Search Console / OAuth verifiers
+    # require the home page URL to return 200 with a visible Privacy Policy
+    # link. The Next.js root page (apps/web/app/page.tsx) renders the link
+    # and then performs a client-side redirect for authenticated/anonymous users.
     reverse_proxy web:3000
 }
 
