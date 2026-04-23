@@ -48,7 +48,11 @@ rsync_api() {
     rsync -az --checksum -e "ssh -i $SSH_KEY" \
       "$LOCAL/apps/api/$f" "$SSH_HOST:$REMOTE/apps/api/$f"
   done
-  echo "✓ API source synced"
+  # DB migrations are baked into the API image at build time (see Dockerfile.prod
+  # `COPY . .`). Always sync so new migrations apply on the next API restart.
+  rsync -az --delete --checksum -e "ssh -i $SSH_KEY" \
+    "$LOCAL/db/migrations/" "$SSH_HOST:$REMOTE/db/migrations/"
+  echo "✓ API source + migrations synced"
 }
 
 rsync_caddy() {

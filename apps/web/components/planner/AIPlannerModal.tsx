@@ -138,13 +138,12 @@ export default function AIPlannerModal({ date, onClose, onApplied }: AIPlannerMo
     const timeoutId = setTimeout(() => controller.abort(), 120_000);
 
     try {
-      const token = typeof window !== 'undefined' ? localStorage.getItem('zentra_token') : null;
       const res = await fetch('/api/planner/ai/generate-plan/stream', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
+        credentials: 'include',
         body: JSON.stringify({
           date,
           startTime,

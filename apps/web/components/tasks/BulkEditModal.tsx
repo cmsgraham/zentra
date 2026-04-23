@@ -6,6 +6,10 @@ import { api } from '@/lib/api-client';
 interface Props {
   taskIds: string[];
   members?: { id: string; name: string }[];
+  /** Optional list of workspaces the user belongs to. When provided, the
+   *  modal exposes a "Move to space" field so bulk edits can also relocate
+   *  intentions across spaces. */
+  workspaces?: { id: string; name: string }[];
   onClose: () => void;
   onDone: () => void;
 }
@@ -13,7 +17,7 @@ interface Props {
 const statuses = ['pending', 'in_progress', 'blocked', 'done'] as const;
 const priorities = ['low', 'medium', 'high', 'critical'] as const;
 
-export default function BulkEditModal({ taskIds, members = [], onClose, onDone }: Props) {
+export default function BulkEditModal({ taskIds, members = [], workspaces = [], onClose, onDone }: Props) {
   // Each field has an "enabled" flag — only enabled fields are sent.
   const [enabled, setEnabled] = useState({
     description: false,
@@ -23,6 +27,7 @@ export default function BulkEditModal({ taskIds, members = [], onClose, onDone }
     estimatedMinutes: false,
     complexity: false,
     assigneeId: false,
+    workspaceId: false,
   });
   const [form, setForm] = useState({
     description: '',
@@ -32,6 +37,7 @@ export default function BulkEditModal({ taskIds, members = [], onClose, onDone }
     estimatedMinutes: '',
     complexity: '1',
     assigneeId: '',
+    workspaceId: '',
     blockedReason: '',
   });
   const [saving, setSaving] = useState(false);
@@ -64,6 +70,13 @@ export default function BulkEditModal({ taskIds, members = [], onClose, onDone }
     }
     if (enabled.complexity) updates.complexity = parseInt(form.complexity) || 1;
     if (enabled.assigneeId) updates.assigneeId = form.assigneeId || null;
+    if (enabled.workspaceId) {
+      if (!form.workspaceId) {
+        setError('Pick a space to move the intentions to.');
+        return;
+      }
+      updates.workspaceId = form.workspaceId;
+    }
 
     if (Object.keys(updates).length === 0) {
       setError('Enable at least one field to apply.');
@@ -176,6 +189,13 @@ export default function BulkEditModal({ taskIds, members = [], onClose, onDone }
           <select className="z-input" value={form.assigneeId} onChange={(e) => setForm((f) => ({ ...f, assigneeId: e.target.value }))}>
             <option value="">Unassigned</option>
             {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        ))}
+
+        {workspaces.length > 0 && fieldRow('workspaceId', 'Move to space', (
+          <select className="z-input" value={form.workspaceId} onChange={(e) => setForm((f) => ({ ...f, workspaceId: e.target.value }))}>
+            <option value="">Choose a space…</option>
+            {workspaces.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
           </select>
         ))}
 

@@ -455,8 +455,7 @@ export default function LayoutEditor({
         {layout.columns.length < MAX_COLUMNS && (
           <button
             onClick={addColumn}
-            className="text-[10px] px-2 py-0.5 rounded transition-colors hover:opacity-80 shrink-0"
-            style={{ color: 'var(--ink-accent)' }}
+            className="z-btn z-btn-primary z-btn-xs shrink-0"
           >
             + Col
           </button>

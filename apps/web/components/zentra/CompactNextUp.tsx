@@ -29,21 +29,22 @@ const REST_SECONDS = 5 * 60;
 // ── Shared button styles (mirror CompactFocusSession) ──────────────────
 const btnPrimary: React.CSSProperties = {
   padding: '11px 14px',
-  background: 'var(--ink-text)',
-  color: 'var(--ink-bg)',
+  background: 'var(--ink-accent)',
+  color: 'var(--ink-on-accent)',
   border: 'none',
-  borderRadius: '9px',
+  borderRadius: '999px',
   fontWeight: 600,
   fontSize: '0.9375rem',
   cursor: 'pointer',
   fontFamily: 'inherit',
+  boxShadow: '0 1px 3px color-mix(in srgb, var(--ink-accent) 40%, transparent)',
 };
 
 const btnSecondary: React.CSSProperties = {
   padding: '11px 14px',
   background: 'var(--ink-surface)',
   border: '1px solid var(--ink-border)',
-  borderRadius: '9px',
+  borderRadius: '999px',
   color: 'var(--ink-text)',
   fontSize: '0.9375rem',
   cursor: 'pointer',
@@ -54,7 +55,7 @@ const btnGhostBorder: React.CSSProperties = {
   padding: '10px 14px',
   background: 'transparent',
   border: '1px solid var(--ink-border)',
-  borderRadius: '9px',
+  borderRadius: '999px',
   color: 'var(--ink-text-muted)',
   fontSize: '0.875rem',
   cursor: 'pointer',

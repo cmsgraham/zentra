@@ -7,6 +7,10 @@ const createWorkspaceSchema = z.object({
   name: z.string().min(1).max(200),
 });
 
+const updateWorkspaceSchema = z.object({
+  name: z.string().min(1).max(200),
+});
+
 const inviteMemberSchema = z.object({
   email: z.string().email(),
   role: z.enum(['admin', 'member']),
@@ -85,6 +89,35 @@ export default async function workspaceRoutes(app: FastifyInstance) {
     } finally {
       client.release();
     }
+  });
+
+  // Rename workspace (owner or admin only).
+  app.patch('/workspaces/:workspaceId', { preHandler: [app.authenticate] }, async (request) => {
+    const { workspaceId } = request.params as { workspaceId: string };
+    const body = updateWorkspaceSchema.parse(request.body);
+    const userId = request.user.sub;
+
+    // Must be owner or admin of this workspace.
+    const membership = await app.pg.query(
+      `SELECT role FROM workspace_members
+       WHERE workspace_id = $1 AND user_id = $2`,
+      [workspaceId, userId],
+    );
+    if (membership.rows.length === 0) throw new NotFoundError('Workspace not found');
+    const role = membership.rows[0].role;
+    if (role !== 'owner' && role !== 'admin') {
+      throw new ForbiddenError('Only owners or admins can rename a workspace');
+    }
+
+    const result = await app.pg.query(
+      `UPDATE workspaces SET name = $1, updated_at = now()
+       WHERE id = $2
+       RETURNING id, name, created_at`,
+      [body.name, workspaceId],
+    );
+    if (result.rows.length === 0) throw new NotFoundError('Workspace not found');
+    const ws = result.rows[0];
+    return { id: ws.id, name: ws.name, role, createdAt: ws.created_at };
   });
 
   // Invite member

@@ -156,10 +156,10 @@ body {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 7px 14px;
+  padding: 7px 16px;
   font-size: 0.8125rem;
   font-weight: 500;
-  border-radius: var(--ink-radius-sm);
+  border-radius: 999px;
   border: 1px solid var(--ink-border);
   background: var(--ink-surface);
   color: var(--ink-text);
@@ -205,14 +205,24 @@ body {
 }
 
 .z-btn-sm {
-  padding: 4px 10px;
+  padding: 4px 12px;
   font-size: 0.75rem;
+  border-radius: 999px;
+}
+
+.z-btn-xs {
+  padding: 2px 10px;
+  font-size: 0.625rem;
+  font-weight: 500;
+  border-radius: 999px;
+  line-height: 1.4;
 }
 
 .z-btn-icon {
   padding: 6px;
   width: 32px;
   height: 32px;
+  border-radius: 999px;
 }
 
 /* ═══ Input primitives ═══ */
@@ -906,7 +916,7 @@ body {
   background: var(--wm-bg);
   display: flex;
   flex-direction: column;
-  padding: 1rem;
+  padding: 0.625rem 0.75rem;
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   color: var(--wm-text);
   /* Subtle grain */
@@ -915,7 +925,8 @@ body {
 
 .mini-wm-standalone {
   height: 100dvh;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .mini-wm-loading,
@@ -935,8 +946,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 1rem;
-  padding-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
   border-bottom: 1px solid var(--wm-divider);
 }
 
@@ -974,32 +985,32 @@ body {
 }
 
 .mini-wm-link-btn {
-  padding: 0.375rem 0.625rem;
+  padding: 0.375rem 0.875rem;
   font-size: 0.6875rem;
-  font-weight: 500;
-  color: var(--wm-text-muted);
-  background: var(--wm-divider);
+  font-weight: 600;
+  color: var(--ink-on-accent);
+  background: var(--ink-accent);
   border: none;
-  border-radius: 6px;
+  border-radius: 999px;
   cursor: pointer;
   transition: all 0.15s ease;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink-accent) 40%, transparent);
 }
 
 .mini-wm-link-btn:hover {
-  color: var(--wm-text);
-  background: var(--wm-check-done);
+  background: var(--ink-accent-hover);
 }
 
 /* Mini Block */
 .mini-wm-block {
-  margin-bottom: 1rem;
+  margin-bottom: 0.625rem;
 }
 
 .mini-wm-block-header {
   display: flex;
   align-items: baseline;
   gap: 0.5rem;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.375rem;
 }
 
 .mini-wm-block-label {
@@ -1041,14 +1052,14 @@ body {
 .mini-wm-task {
   display: flex;
   align-items: flex-start;
-  gap: 0.625rem;
-  padding: 0.5rem 0.25rem;
+  gap: 0.5rem;
+  padding: 0.3125rem 0.25rem;
   background: none;
   border: none;
   cursor: pointer;
   text-align: left;
   width: 100%;
-  min-height: 36px;
+  min-height: 28px;
   transition: opacity 0.2s ease;
   -webkit-tap-highlight-color: transparent;
   border-radius: 6px;
@@ -1119,19 +1130,20 @@ body {
 
 .mini-wm-next-block-btn {
   margin-left: auto;
-  padding: 0.3rem 0.6rem;
-  font-size: 0.625rem;
-  font-weight: 500;
-  color: var(--wm-text);
-  background: var(--wm-divider);
+  padding: 0.25rem 0.75rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--ink-on-accent);
+  background: var(--ink-accent);
   border: none;
-  border-radius: 5px;
+  border-radius: 999px;
   cursor: pointer;
   transition: all 0.15s ease;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink-accent) 40%, transparent);
 }
 
 .mini-wm-next-block-btn:hover {
-  background: var(--wm-check-done);
+  background: var(--ink-accent-hover);
 }
 
 .mini-wm-minutes-left {
@@ -1146,7 +1158,7 @@ body {
   border: none;
   height: 1px;
   background: var(--wm-divider);
-  margin: 0.75rem 0;
+  margin: 0.5rem 0;
 }
 
 /* Mini Next Section */
@@ -1209,10 +1221,13 @@ body {
 /* Mini Footer */
 .mini-wm-footer {
   margin-top: auto;
-  padding-top: 1rem;
+  padding-top: 0.625rem;
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem;
+  position: sticky;
+  bottom: 0;
+  background: var(--wm-bg);
 }
 
 .mini-wm-progress-bar {

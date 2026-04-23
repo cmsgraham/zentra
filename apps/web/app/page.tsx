@@ -13,7 +13,7 @@ export default function HomePage() {
   useEffect(() => {
     if (loading) return;
     if (user) router.replace('/today');
-    else router.replace('/login');
+    else router.replace('/welcome');
   }, [user, loading, router]);
 
   return (

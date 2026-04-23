@@ -31,6 +31,12 @@ export default function WorkspacesPage() {
   const [creating, setCreating] = useState(false);
   const [accepting, setAccepting] = useState<string | null>(null);
 
+  // Rename flow
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [savingRename, setSavingRename] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+
   useEffect(() => { loadWorkspaces(); loadInvites(); }, []);
 
   async function loadWorkspaces() {
@@ -67,6 +73,39 @@ export default function WorkspacesPage() {
     router.push(`/workspaces/${ws.id}`);
   }
 
+  function openRename(ws: Workspace) {
+    setRenamingId(ws.id);
+    setRenameValue(ws.name);
+    setRenameError(null);
+  }
+
+  function cancelRename() {
+    setRenamingId(null);
+    setRenameValue('');
+    setRenameError(null);
+  }
+
+  async function handleRename(e: FormEvent) {
+    e.preventDefault();
+    if (!renamingId) return;
+    const trimmed = renameValue.trim();
+    if (!trimmed) return;
+    setSavingRename(true);
+    setRenameError(null);
+    try {
+      const updated = await api<Workspace>(`/workspaces/${renamingId}`, {
+        method: 'PATCH',
+        body: { name: trimmed },
+      });
+      setWorkspaces((prev) => prev.map((w) => (w.id === updated.id ? { ...w, name: updated.name } : w)));
+      cancelRename();
+    } catch (err: any) {
+      setRenameError(err?.message || 'Could not rename');
+    } finally {
+      setSavingRename(false);
+    }
+  }
+
   return (
     <AuthShell>
       <div className="min-h-[calc(100vh-56px)] flex flex-col">
@@ -84,8 +123,7 @@ export default function WorkspacesPage() {
             </div>
             <button
               onClick={() => setShowCreate(true)}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium text-white transition-colors hover:opacity-90 active:scale-[0.97]"
-              style={{ background: 'var(--ink-accent)' }}
+              className="z-btn z-btn-primary"
             >
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                 <line x1="8" y1="3" x2="8" y2="13" /><line x1="3" y1="8" x2="13" y2="8" />
@@ -190,36 +228,49 @@ export default function WorkspacesPage() {
               </p>
               <div className="grid gap-2 sm:grid-cols-2">
                 {workspaces.map((ws) => (
-                  <button
+                  <div
                     key={ws.id}
-                    onClick={() => router.push(`/workspaces/${ws.id}`)}
-                    className="text-left p-4 rounded-xl transition-all duration-150 group"
+                    className="relative group rounded-xl transition-all duration-150"
                     style={{
                       background: 'var(--ink-surface)',
                       boxShadow: '0 0 0 1px var(--ink-border)',
                     }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.boxShadow = '0 0 0 1px var(--ink-accent)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.boxShadow = '0 0 0 1px var(--ink-border)';
-                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.boxShadow = '0 0 0 1px var(--ink-accent)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.boxShadow = '0 0 0 1px var(--ink-border)'; }}
                   >
-                    <div className="flex items-center gap-3">
-                      <div
-                        className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0"
-                        style={{
-                          background: 'var(--ink-subtle)',
-                          color: 'var(--ink-accent)',
-                        }}
-                      >
-                        {ws.name.charAt(0).toUpperCase()}
+                    <button
+                      onClick={() => router.push(`/workspaces/${ws.id}`)}
+                      className="w-full text-left p-4 rounded-xl"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div
+                          className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0"
+                          style={{
+                            background: 'var(--ink-subtle)',
+                            color: 'var(--ink-accent)',
+                          }}
+                        >
+                          {ws.name.charAt(0).toUpperCase()}
+                        </div>
+                        <div className="min-w-0 pr-8">
+                          <h3 className="font-medium text-sm truncate">{ws.name}</h3>
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <h3 className="font-medium text-sm truncate">{ws.name}</h3>
-                      </div>
-                    </div>
-                  </button>
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); openRename(ws); }}
+                      className="absolute top-2 right-2 p-1.5 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
+                      style={{ color: 'var(--ink-text-muted)' }}
+                      title="Rename space"
+                      aria-label={`Rename ${ws.name}`}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--ink-surface-hover)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+                      </svg>
+                    </button>
+                  </div>
                 ))}
               </div>
             </div>
@@ -277,6 +328,66 @@ export default function WorkspacesPage() {
                   style={{ background: 'var(--ink-accent)' }}
                 >
                   {creating ? 'Creating…' : 'Create'}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* ── Rename Modal ── */}
+        {renamingId && (
+          <div
+            className="fixed inset-0 z-40 flex items-center justify-center px-4"
+            style={{ background: 'rgba(0,0,0,0.35)', backdropFilter: 'blur(4px)' }}
+            onClick={cancelRename}
+          >
+            <form
+              onClick={(e) => e.stopPropagation()}
+              onSubmit={handleRename}
+              className="w-full max-w-sm rounded-2xl p-6 space-y-5"
+              style={{
+                background: 'var(--ink-surface)',
+                boxShadow: '0 24px 80px rgba(0,0,0,0.2)',
+              }}
+            >
+              <div>
+                <h2 className="text-lg font-semibold">Rename space</h2>
+                <p className="text-xs mt-1" style={{ color: 'var(--ink-text-muted)' }}>
+                  Only owners and admins can rename.
+                </p>
+              </div>
+              <input
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                required
+                autoFocus
+                maxLength={200}
+                className="w-full px-4 py-3 rounded-xl text-sm outline-none transition-shadow focus:ring-2"
+                style={{
+                  border: '1px solid var(--ink-border)',
+                  background: 'var(--ink-bg)',
+                  boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+                }}
+              />
+              {renameError && (
+                <p className="text-xs" style={{ color: 'var(--ink-blocked)' }}>{renameError}</p>
+              )}
+              <div className="flex gap-2 justify-end pt-1">
+                <button
+                  type="button"
+                  onClick={cancelRename}
+                  className="px-4 py-2.5 rounded-xl text-sm font-medium transition-colors"
+                  style={{ color: 'var(--ink-text-muted)' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingRename || !renameValue.trim()}
+                  className="px-5 py-2.5 rounded-lg text-sm font-medium text-white disabled:opacity-50 transition-colors hover:opacity-90 active:scale-[0.97]"
+                  style={{ background: 'var(--ink-accent)' }}
+                >
+                  {savingRename ? 'Saving…' : 'Rename'}
                 </button>
               </div>
             </form>

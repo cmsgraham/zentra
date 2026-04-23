@@ -4,48 +4,97 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
 interface SidebarProps {
+  /** Workspace id, or the string "all" for the aggregated cross-space board. */
   workspaceId: string;
 }
 
-const navItems = (id: string) => [
-  { href: `/workspaces/${id}`, label: 'Board', icon: (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>
-    </svg>
-  )},
-  { href: `/workspaces/${id}/blocked`, label: 'Waiting on…', icon: (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
-    </svg>
-  )},
-  { href: `/workspaces/${id}/archive`, label: 'Archive', icon: (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/>
-    </svg>
-  )},
-  { href: `/workspaces/${id}/import/text`, label: 'Text Import', icon: (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
-    </svg>
-  )},
-  { href: `/workspaces/${id}/import/image`, label: 'Image Import', icon: (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
-    </svg>
-  )},
-];
+const navItems = (id: string) => {
+  // Cross-space view: only Board is meaningful — the per-space tools (blocked,
+  // archive, imports) don't generalise. Render them disabled so the layout
+  // stays identical to single-workspace boards.
+  if (id === 'all') {
+    return [
+      { href: `/workspaces/all`, label: 'Board', disabled: false, icon: (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>
+        </svg>
+      )},
+      { href: `#`, label: 'Waiting on…', disabled: true, icon: (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+        </svg>
+      )},
+      { href: `#`, label: 'Archive', disabled: true, icon: (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/>
+        </svg>
+      )},
+      { href: `#`, label: 'Text Import', disabled: true, icon: (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+        </svg>
+      )},
+      { href: `#`, label: 'Image Import', disabled: true, icon: (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+        </svg>
+      )},
+    ];
+  }
+  return [
+    { href: `/workspaces/${id}`, label: 'Board', disabled: false, icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>
+      </svg>
+    )},
+    { href: `/workspaces/${id}/blocked`, label: 'Waiting on…', disabled: false, icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+      </svg>
+    )},
+    { href: `/workspaces/${id}/archive`, label: 'Archive', disabled: false, icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/>
+      </svg>
+    )},
+    { href: `/workspaces/${id}/import/text`, label: 'Text Import', disabled: false, icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+      </svg>
+    )},
+    { href: `/workspaces/${id}/import/image`, label: 'Image Import', disabled: false, icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+      </svg>
+    )},
+  ];
+};
 
 export default function WorkspaceSidebar({ workspaceId }: SidebarProps) {
   const pathname = usePathname();
+  const isAll = workspaceId === 'all';
 
   return (
     <aside
       className="w-52 shrink-0 p-3 flex flex-col gap-0.5"
       style={{ background: 'var(--ink-bg)', borderRight: '1px solid var(--ink-border-subtle)' }}
     >
-      <p className="z-section-title px-2.5 mb-2 mt-1">Space</p>
+      <p className="z-section-title px-2.5 mb-2 mt-1">{isAll ? 'All spaces' : 'Space'}</p>
       {navItems(workspaceId).map((item) => {
-        const active = pathname === item.href;
+        const active = !item.disabled && pathname === item.href;
+        if (item.disabled) {
+          return (
+            <div
+              key={item.label}
+              className="flex items-center gap-2.5 px-2.5 py-[7px] rounded-md text-[13px]"
+              style={{ color: 'var(--ink-text-faint)', opacity: 0.45, cursor: 'not-allowed' }}
+              title="Open a specific space to use this"
+            >
+              <span style={{ opacity: 0.6 }}>{item.icon}</span>
+              {item.label}
+            </div>
+          );
+        }
         return (
           <Link
             key={item.href}

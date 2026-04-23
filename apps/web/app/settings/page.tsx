@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/auth';
 import { useTheme } from '@/lib/theme';
 import { api } from '@/lib/api-client';
 import AuthenticatedLayout from '@/components/layout/AuthShell';
+import SecuritySection from '@/components/settings/SecuritySection';
 
 const COMMON_TIMEZONES = [
   'America/New_York',
@@ -353,6 +354,8 @@ export default function SettingsPage() {
               <span className="text-sm" style={{ color: 'var(--ink-accent)' }}>Saved!</span>
             )}
           </div>
+
+          <SecuritySection />
         </div>
       </div>
     </AuthenticatedLayout>

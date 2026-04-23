@@ -1,6 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
+  // Hide the floating Next.js dev indicator / "troubleshoot" button in the corner.
+  devIndicators: false,
   typescript: {
     ignoreBuildErrors: false,
   },

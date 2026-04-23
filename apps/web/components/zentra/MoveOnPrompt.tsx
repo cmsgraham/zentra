@@ -219,10 +219,10 @@ export function MoveOnPrompt({ sessionId, taskTitle, onDone, onCancel, variant =
           disabled={saving}
           style={{
             padding: '11px 14px',
-            background: 'var(--ink-text)',
-            color: 'var(--ink-bg)',
+            background: 'var(--ink-accent)',
+            color: 'var(--ink-on-accent)',
             border: 'none',
-            borderRadius: '9px',
+            borderRadius: '999px',
             fontWeight: 600,
             fontSize: '0.9375rem',
             cursor: saving ? 'not-allowed' : 'pointer',

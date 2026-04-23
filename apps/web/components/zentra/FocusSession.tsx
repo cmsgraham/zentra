@@ -240,7 +240,7 @@ export function FocusSession({
             <button
               onClick={handleComplete}
               disabled={loading !== null}
-              style={{ padding: '14px', background: 'var(--ink-text)', color: 'var(--ink-bg)', border: 'none', borderRadius: '10px', fontWeight: 600, cursor: 'pointer' }}
+              style={{ padding: '14px', background: 'var(--ink-accent)', color: 'var(--ink-on-accent)', border: 'none', borderRadius: '999px', fontWeight: 600, cursor: 'pointer' }}
             >
               {loading === 'complete' ? '...' : 'Mark done'}
             </button>
@@ -273,7 +273,7 @@ export function FocusSession({
             <button
               onClick={handleComplete}
               disabled={loading !== null}
-              style={{ flex: 1, padding: '14px', background: 'var(--ink-text)', color: 'var(--ink-bg)', border: 'none', borderRadius: '10px', fontWeight: 600, cursor: 'pointer' }}
+              style={{ flex: 1, padding: '14px', background: 'var(--ink-accent)', color: 'var(--ink-on-accent)', border: 'none', borderRadius: '999px', fontWeight: 600, cursor: 'pointer' }}
             >
               {loading === 'complete' ? '...' : 'Done'}
             </button>
@@ -378,7 +378,7 @@ export function FocusSession({
             </div>
             <button
               onClick={() => handleCheckpointContinue(15)}
-              style={{ padding: '14px', background: 'var(--ink-text)', color: 'var(--ink-bg)', border: 'none', borderRadius: '10px', fontWeight: 600, cursor: 'pointer' }}
+              style={{ padding: '14px', background: 'var(--ink-accent)', color: 'var(--ink-on-accent)', border: 'none', borderRadius: '999px', fontWeight: 600, cursor: 'pointer' }}
             >
               Continue once more (+15 min)
             </button>
@@ -432,7 +432,7 @@ export function FocusSession({
             </div>
             <button
               onClick={() => { setShowStuckLimit(false); setShowMoveOn(true); }}
-              style={{ padding: '14px', background: 'var(--ink-text)', color: 'var(--ink-bg)', border: 'none', borderRadius: '10px', fontWeight: 600, cursor: 'pointer' }}
+              style={{ padding: '14px', background: 'var(--ink-accent)', color: 'var(--ink-on-accent)', border: 'none', borderRadius: '999px', fontWeight: 600, cursor: 'pointer' }}
             >
               Change task
             </button>

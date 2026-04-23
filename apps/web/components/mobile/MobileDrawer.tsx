@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useRouter, useParams, usePathname } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { useTheme } from '@/lib/theme';
 
@@ -19,9 +19,11 @@ interface Props {
 export default function MobileDrawer({ open, onClose, workspaces }: Props) {
   const router = useRouter();
   const params = useParams();
+  const pathname = usePathname();
   const { user, logout } = useAuth();
   const { theme, toggle: toggleTheme } = useTheme();
   const currentWorkspaceId = params.workspaceId as string | undefined;
+  const isOnAllSpaces = pathname?.startsWith('/workspaces/all') ?? false;
 
   // Lock body scroll when open
   useEffect(() => {
@@ -40,11 +42,20 @@ export default function MobileDrawer({ open, onClose, workspaces }: Props) {
   const menuSections = [
     {
       title: 'Spaces',
-      items: workspaces.map((ws) => ({
-        label: ws.name,
-        active: ws.id === currentWorkspaceId,
-        action: () => nav(`/workspaces/${ws.id}`),
-      })),
+      items: [
+        ...(workspaces.length > 1
+          ? [{
+              label: 'All spaces',
+              active: isOnAllSpaces,
+              action: () => nav('/workspaces/all'),
+            }]
+          : []),
+        ...workspaces.map((ws) => ({
+          label: ws.name,
+          active: ws.id === currentWorkspaceId,
+          action: () => nav(`/workspaces/${ws.id}`),
+        })),
+      ],
     },
     {
       title: 'Tools',

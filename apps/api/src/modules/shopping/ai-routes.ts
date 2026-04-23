@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { BadRequestError, ForbiddenError, NotFoundError } from '../../lib/errors.js';
+import { assertAllowedImage } from '../../lib/file-validation.js';
 import { v4 as uuidv4 } from 'uuid';
 
 const textImportSchema = z.object({
@@ -62,15 +63,8 @@ export default async function shoppingAIRoutes(app: FastifyInstance) {
     const file = await request.file();
     if (!file) throw new BadRequestError('Image file is required');
 
-    const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/webp'];
-    if (!allowedMimeTypes.includes(file.mimetype)) {
-      throw new BadRequestError('Only JPG, PNG, and WEBP images are allowed');
-    }
-
     const buffer = await file.toBuffer();
-    if (buffer.length > 10 * 1024 * 1024) {
-      throw new BadRequestError('Image must be under 10 MB');
-    }
+    await assertAllowedImage(buffer, file.mimetype);
 
     const key = `shopping-imports/${userId}/${uuidv4()}-${file.filename}`;
     const fileUrl = await app.uploadFile(key, buffer, file.mimetype);

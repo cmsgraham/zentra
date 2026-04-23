@@ -171,10 +171,10 @@ export function TodayView() {
             style={{
               flex: 1,
               padding: '14px',
-              background: 'var(--ink-text)',
-              color: 'var(--ink-bg)',
+              background: 'var(--ink-accent)',
+              color: 'var(--ink-on-accent)',
               border: 'none',
-              borderRadius: '10px',
+              borderRadius: '999px',
               fontWeight: 600,
               cursor: 'pointer',
             }}
@@ -235,6 +235,7 @@ export function TodayView() {
       <CompleteDayView
         completedCount={stats.completedCount}
         totalMinutes={stats.totalMinutes}
+        endOfDayTime={endOfDay}
         onAddAnother={() => {
           setPriority(null);
           setState('empty');

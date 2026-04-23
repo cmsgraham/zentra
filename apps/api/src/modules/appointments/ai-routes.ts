@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { BadRequestError } from '../../lib/errors.js';
+import { assertAllowedImage } from '../../lib/file-validation.js';
 import { getEnv } from '../../lib/env.js';
 
 const SYSTEM_PROMPT = `You are an AI system that extracts calendar events from images.
@@ -56,15 +57,8 @@ export default async function appointmentAIRoutes(app: FastifyInstance) {
       throw new BadRequestError('Image file is required');
     }
 
-    const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/webp'];
-    if (!allowedMimeTypes.includes(file.mimetype)) {
-      throw new BadRequestError('Only JPG, PNG, and WEBP images are allowed');
-    }
-
     const buffer = await file.toBuffer();
-    if (buffer.length > 10 * 1024 * 1024) {
-      throw new BadRequestError('Image must be under 10 MB');
-    }
+    await assertAllowedImage(buffer, file.mimetype);
 
     // Convert to base64 data URI for OpenAI Vision
     const base64 = buffer.toString('base64');

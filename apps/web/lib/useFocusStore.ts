@@ -1,8 +1,8 @@
 import { create } from 'zustand';
 import { api } from './api-client';
 
-const POPUP_W = 400;
-const POPUP_H = 520;
+const POPUP_W = 420;
+const POPUP_H = 640;
 const CHANNEL_NAME = 'zentra-focus-session';
 
 let _channel: BroadcastChannel | null = null;

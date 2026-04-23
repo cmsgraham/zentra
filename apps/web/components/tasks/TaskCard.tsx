@@ -15,6 +15,8 @@ export interface TaskData {
   tags?: string[];
   hasSegments?: boolean;
   segmentProgress?: { completed: number; total: number } | null;
+  workspaceId?: string;
+  workspaceName?: string;
 }
 
 interface Props {
@@ -26,6 +28,9 @@ interface Props {
   isDragOverlay?: boolean;
   /** When true, visually dim this card (e.g. it's part of a multi-drag selection). */
   dimmed?: boolean;
+  /** Optional per-workspace accent colour — rendered as a thin left border to
+   *  differentiate tasks from different workspaces on the aggregated board. */
+  accentColor?: string;
 }
 
 function formatDate(dateStr: string): string {
@@ -39,7 +44,7 @@ function formatDate(dateStr: string): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-export default function TaskCard({ task, onClick, onToggleDone, onToggleSelect, selected, isDragOverlay, dimmed }: Props) {
+export default function TaskCard({ task, onClick, onToggleDone, onToggleSelect, selected, isDragOverlay, dimmed, accentColor }: Props) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: task.id,
     data: { task },
@@ -56,6 +61,9 @@ export default function TaskCard({ task, onClick, onToggleDone, onToggleSelect, 
     opacity: isDragging || dimmed ? 0.3 : 1,
     ...(isDragOverlay ? { background: 'var(--ink-surface)', boxShadow: '0 4px 16px rgba(0,0,0,0.10)', borderRadius: '8px', padding: '12px 14px' } : {}),
     ...(selected ? { outline: '2px solid var(--ink-accent, #3b82f6)', outlineOffset: '-2px', borderRadius: '8px' } : {}),
+    ...(accentColor
+      ? { borderLeft: `3px solid ${accentColor}`, paddingLeft: '9px', borderRadius: '4px' }
+      : {}),
   };
 
   const meta: string[] = [];

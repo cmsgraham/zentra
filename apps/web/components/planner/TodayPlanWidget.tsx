@@ -112,8 +112,7 @@ export default function TodayPlanWidget({ blocks, date, onRebuild, goals = [] }:
         <div className="flex items-center gap-2">
           <button
             onClick={onRebuild}
-            className="text-[10px] px-2 py-0.5 rounded transition-colors duration-100 hover:opacity-80"
-            style={{ color: 'var(--ink-accent)' }}
+            className="z-btn z-btn-primary z-btn-xs"
           >
             re-tune
           </button>

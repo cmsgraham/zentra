@@ -3,8 +3,8 @@
 import { useEffect, useState } from 'react';
 import { useFocusStore } from '@/lib/useFocusStore';
 
-const POPUP_W = 360;
-const POPUP_H = 480;
+const POPUP_W = 420;
+const POPUP_H = 640;
 
 function reopenWorkingPopup() {
   const date = new Date().toLocaleDateString('en-CA');

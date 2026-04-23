@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '@/lib/api-client';
+import { useAuth } from '@/lib/auth';
 
 interface MemberItem {
   user: { id: string; email: string; name: string };
@@ -32,13 +33,10 @@ export default function WorkspaceMembersModal({ workspaceId, onClose }: Props) {
 
   useEffect(() => {
     // Detect current user's role
-    const token = localStorage.getItem('zentra_token');
-    if (token) {
-      try {
-        const payload = JSON.parse(atob(token.split('.')[1]));
-        const me = members.find(m => m.user.id === payload.sub);
-        if (me) setMyRole(me.role);
-      } catch { /* ignore */ }
+    const currentUserId = useAuth.getState().user?.id;
+    if (currentUserId) {
+      const me = members.find(m => m.user.id === currentUserId);
+      if (me) setMyRole(me.role);
     }
   }, [members]);
 

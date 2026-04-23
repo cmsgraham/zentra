@@ -11,6 +11,7 @@ import FocusOverlay from '@/components/planner/FocusOverlay';
 import MobileTopBar from '@/components/mobile/MobileTopBar';
 import MobileBottomNav from '@/components/mobile/MobileBottomNav';
 import MobileDrawer from '@/components/mobile/MobileDrawer';
+import EmailVerifyBanner from '@/components/layout/EmailVerifyBanner';
 
 interface Workspace {
   id: string;
@@ -35,6 +36,7 @@ function getMobileTitle(pathname: string, workspaceName?: string): string {
   if (pathname.includes('/import/text')) return 'Text Import';
   if (pathname.includes('/import/image')) return 'Image Import';
   if (pathname === '/workspaces') return 'Studio';
+  if (pathname === '/workspaces/all') return 'All spaces';
   if (pathname.startsWith('/workspaces/')) return workspaceName || 'Space';
   return 'zentra';
 }
@@ -88,6 +90,7 @@ export default function AuthenticatedLayout({ children }: { children: React.Reac
   }
 
   const currentWorkspace = workspaces.find((w) => w.id === currentWorkspaceId);
+  const isOnAllSpaces = pathname === '/workspaces/all' || pathname.startsWith('/workspaces/all/');
   const isOnWorkspacePage = pathname.startsWith('/workspaces/');
 
   // ── MOBILE LAYOUT ──
@@ -99,6 +102,7 @@ export default function AuthenticatedLayout({ children }: { children: React.Reac
     return (
       <div className="min-h-screen flex flex-col" style={{ background: 'var(--ink-bg)' }}>
         <MobileTopBar title={title} onMenuPress={() => setDrawerOpen(true)} logoSrc={logoSrc} />
+        <EmailVerifyBanner />
         <main className="flex-1 overflow-y-auto" style={{ paddingBottom: '64px' }}>
           {children}
         </main>
@@ -134,7 +138,7 @@ export default function AuthenticatedLayout({ children }: { children: React.Reac
                   className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[13px] font-medium transition-all"
                   style={{ color: 'var(--ink-text-secondary)' }}
                 >
-                  <span className="max-w-[180px] truncate">{currentWorkspace?.name ?? 'Space'}</span>
+                  <span className="max-w-[180px] truncate">{isOnAllSpaces ? 'All spaces' : (currentWorkspace?.name ?? 'Space')}</span>
                   <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{ flexShrink: 0, opacity: 0.5 }}>
                     <path d="M2.5 4l2.5 2.5L7.5 4" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round"/>
                   </svg>
@@ -143,6 +147,31 @@ export default function AuthenticatedLayout({ children }: { children: React.Reac
                   <div
                     className="absolute left-0 top-full mt-1.5 w-52 py-1 z-50 max-h-64 overflow-y-auto z-overlay z-animate-in"
                   >
+                    {workspaces.length > 1 && (
+                      <>
+                        <button
+                          onClick={() => { setWsOpen(false); router.push('/workspaces/all'); }}
+                          className="w-full text-left px-3 py-1.5 text-[13px] transition-colors rounded-md mx-1"
+                          style={{
+                            width: 'calc(100% - 8px)',
+                            background: isOnAllSpaces ? 'var(--ink-accent-light)' : 'transparent',
+                            fontWeight: isOnAllSpaces ? 550 : 400,
+                            color: isOnAllSpaces ? 'var(--ink-accent)' : 'var(--ink-text)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                          }}
+                          onMouseEnter={(e) => { if (!isOnAllSpaces) e.currentTarget.style.background = 'var(--ink-surface-hover)'; }}
+                          onMouseLeave={(e) => { if (!isOnAllSpaces) e.currentTarget.style.background = 'transparent'; }}
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.75 }}>
+                            <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
+                          </svg>
+                          All spaces
+                        </button>
+                        <div className="my-1 mx-2" style={{ height: '1px', background: 'var(--ink-border-subtle)' }} />
+                      </>
+                    )}
                     {workspaces.map((ws) => (
                       <button
                         key={ws.id}
@@ -168,7 +197,7 @@ export default function AuthenticatedLayout({ children }: { children: React.Reac
                       onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--ink-surface-hover)'; }}
                       onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                     >
-                      All spaces…
+                      Manage spaces…
                     </button>
                   </div>
                 )}
@@ -185,35 +214,21 @@ export default function AuthenticatedLayout({ children }: { children: React.Reac
           >
             Flow
           </button>
-          <button
-            onClick={() => router.push('/workspaces')}
-            className="z-btn-ghost z-btn-sm rounded-md"
-            style={{ color: pathname.startsWith('/workspaces') ? 'var(--ink-accent)' : 'var(--ink-text-muted)', fontSize: '0.8125rem' }}
-          >
-            Studio
-          </button>
+          {!pathname.startsWith('/planner') && (
+            <button
+              onClick={() => router.push('/workspaces')}
+              className="z-btn-ghost z-btn-sm rounded-md"
+              style={{ color: pathname.startsWith('/workspaces') ? 'var(--ink-accent)' : 'var(--ink-text-muted)', fontSize: '0.8125rem' }}
+            >
+              Studio
+            </button>
+          )}
           <button
             onClick={() => router.push('/lists')}
             className="z-btn-ghost z-btn-sm rounded-md"
             style={{ color: pathname.startsWith('/lists') || pathname.startsWith('/shopping') ? 'var(--ink-accent)' : 'var(--ink-text-muted)', fontSize: '0.8125rem' }}
           >
             Lists
-          </button>
-          <button
-            onClick={() => {
-              const date = new Date().toLocaleDateString('en-CA');
-              const left = window.screenX + (window.outerWidth - 360) / 2;
-              const top = window.screenY + (window.outerHeight - 480) / 2;
-              window.open(`/planner/working/mini?date=${date}`, 'zentra-mini-working', `width=360,height=480,left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no,resizable=yes`);
-            }}
-            className="z-btn-ghost z-btn-icon rounded-md"
-            style={{ color: 'var(--ink-text-muted)', width: '30px', height: '30px' }}
-            title="Pop out day view"
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M9 1h6v6M7 15H1V9" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M15 1L9 7M1 15l6-6" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
           </button>
           <div className="w-px h-4 mx-1.5" style={{ background: 'var(--ink-border-subtle)' }} />
           <button
@@ -253,6 +268,7 @@ export default function AuthenticatedLayout({ children }: { children: React.Reac
           </button>
         </div>
       </header>
+      <EmailVerifyBanner />
       <main className="flex-1">{children}</main>
       <FocusOverlay />
     </div>

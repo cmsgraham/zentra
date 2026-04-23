@@ -457,6 +457,7 @@ export default async function taskRoutes(app: FastifyInstance) {
       complexity: z.number().int().min(1).max(3).optional().nullable(),
       assigneeId: z.string().uuid().optional().nullable(),
       blockedReason: z.string().max(1000).optional().nullable(),
+      workspaceId: z.string().uuid().optional(),
     }).refine((u) => Object.keys(u).length > 0, { message: 'At least one field must be provided' }),
   });
 
@@ -476,6 +477,11 @@ export default async function taskRoutes(app: FastifyInstance) {
     const workspaceIds = Array.from(new Set(existing.rows.map((r: any) => r.workspace_id)));
     for (const wsId of workspaceIds) {
       await checkMembership(app, wsId as string, userId);
+    }
+
+    // If moving to a different workspace, verify membership of the target too.
+    if (updates.workspaceId) {
+      await checkMembership(app, updates.workspaceId, userId);
     }
 
     if (updates.status === 'blocked' && !updates.blockedReason) {
@@ -505,8 +511,9 @@ export default async function taskRoutes(app: FastifyInstance) {
              complexity = CASE WHEN $9::boolean THEN $10::smallint ELSE complexity END,
              assignee_id = CASE WHEN $11::boolean THEN $12::uuid ELSE assignee_id END,
              blocked_reason = CASE WHEN $13::boolean THEN $14 ELSE blocked_reason END,
-             completed_at = $15
-           WHERE id = $16`,
+             workspace_id = COALESCE($15::uuid, workspace_id),
+             completed_at = $16
+           WHERE id = $17`,
           [
             updates.description !== undefined, updates.description ?? null,
             updates.status ?? null,
@@ -516,6 +523,7 @@ export default async function taskRoutes(app: FastifyInstance) {
             updates.complexity !== undefined, updates.complexity ?? null,
             updates.assigneeId !== undefined, updates.assigneeId ?? null,
             updates.blockedReason !== undefined, updates.blockedReason ?? null,
+            updates.workspaceId ?? null,
             completedAt,
             row.id,
           ],
@@ -630,8 +638,10 @@ export default async function taskRoutes(app: FastifyInstance) {
     if (!existing) throw new NotFoundError('Task not found');
     await checkMembership(app, existing.workspaceId, request.user.sub);
 
-    await app.pg.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+    // Log BEFORE deleting — task_activity has FK task_id referencing tasks(id),
+    // so logging after DELETE would fail the FK constraint.
     await logActivity(app, taskId, request.user.sub, 'deleted', { title: existing.title }, null);
+    await app.pg.query('DELETE FROM tasks WHERE id = $1', [taskId]);
     return reply.status(204).send();
   });
 

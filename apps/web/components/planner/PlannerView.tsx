@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { usePlannerLayout, type WidgetId } from '@/lib/planner-layout';
 import LayoutEditor from '@/components/planner/LayoutEditor';
@@ -97,11 +97,19 @@ export default function PlannerView({ workspaceId, workspaceName }: PlannerViewP
   // Init layout from API
   useEffect(() => { initLayout(); }, []);
 
-  // Date state
+  // Date state. Honor ?date=YYYY-MM-DD on first load so entry points like the
+  // Completion Ritual's "Prepare tomorrow" can open the planner on the right day.
+  const searchParams = useSearchParams();
   const today = new Date();
-  const [selectedDate, setSelectedDate] = useState(isoDate(today));
-  const [calYear, setCalYear] = useState(today.getFullYear());
-  const [calMonth, setCalMonth] = useState(today.getMonth());
+  const initialDate = (() => {
+    const q = searchParams?.get('date');
+    if (q && /^\d{4}-\d{2}-\d{2}$/.test(q)) return q;
+    return isoDate(today);
+  })();
+  const initialRef = new Date(initialDate + 'T00:00:00');
+  const [selectedDate, setSelectedDate] = useState(initialDate);
+  const [calYear, setCalYear] = useState(initialRef.getFullYear());
+  const [calMonth, setCalMonth] = useState(initialRef.getMonth());
 
   // Data
   const [plan, setPlan] = useState<PlanData | null>(null);
@@ -293,6 +301,9 @@ export default function PlannerView({ workspaceId, workspaceName }: PlannerViewP
       },
     });
     // Picker stays open so multiple intentions can be added in one go.
+    // Remove the just-added task from the picker list immediately so users
+    // don't accidentally add it twice.
+    setAvailableTasks((prev) => prev.filter((t) => t.id !== task.id));
     setTaskSearch('');
     await loadPlannerData();
     await loadTasks();
@@ -414,15 +425,13 @@ export default function PlannerView({ workspaceId, workspaceName }: PlannerViewP
               <div className="flex items-center gap-1">
                 <button
                   onClick={() => setShowAIExtract(true)}
-                  className="text-[10px] px-2 py-0.5 rounded transition-colors duration-100 hover:opacity-80"
-                  style={{ color: 'var(--ink-accent)' }}
+                  className="z-btn z-btn-primary z-btn-xs"
                 >
                   import
                 </button>
                 <button
                   onClick={() => { setEditingAppt(null); setShowApptForm(true); }}
-                  className="text-[10px] px-2 py-0.5 rounded transition-colors duration-100 hover:opacity-80"
-                  style={{ color: 'var(--ink-accent)' }}
+                  className="z-btn z-btn-primary z-btn-xs"
                 >
                   + add
                 </button>
@@ -467,8 +476,7 @@ export default function PlannerView({ workspaceId, workspaceName }: PlannerViewP
               <CardLabel>Today&apos;s Goals</CardLabel>
               <button
                 onClick={() => { setShowTaskPicker(!showTaskPicker); if (!showTaskPicker) loadAvailableTasks(); }}
-                className="text-[10px] px-2 py-0.5 rounded transition-colors duration-100 hover:opacity-80"
-                style={{ color: 'var(--ink-accent)' }}
+                className="z-btn z-btn-primary z-btn-xs"
               >
                 {showTaskPicker ? 'done' : '+ intention'}
               </button>
@@ -620,8 +628,7 @@ export default function PlannerView({ workspaceId, workspaceName }: PlannerViewP
               <CardLabel>{dueLabel}</CardLabel>
               <button
                 onClick={() => setShowQuickCreate(!showQuickCreate)}
-                className="text-[10px] px-2 py-0.5 rounded transition-colors duration-100 hover:opacity-80"
-                style={{ color: 'var(--ink-accent)' }}
+                className="z-btn z-btn-primary z-btn-xs"
               >
                 {showQuickCreate ? 'cancel' : '+ new'}
               </button>
@@ -889,14 +896,13 @@ export default function PlannerView({ workspaceId, workspaceName }: PlannerViewP
         <div className="flex items-center justify-end gap-2 mb-3 shrink-0">
           <button
             onClick={() => setShowAIPlanner(true)}
-            className="z-btn z-btn-sm"
-            style={{ color: 'var(--ink-accent)', borderColor: 'color-mix(in srgb, var(--ink-accent) 30%, transparent)', background: 'color-mix(in srgb, var(--ink-accent) 8%, transparent)' }}
+            className="z-btn z-btn-primary z-btn-sm"
           >
             Shape flow with AI
           </button>
           <button
             onClick={() => setEditingLayout(!editingLayout)}
-            className={`hidden md:inline-flex ${editingLayout ? 'z-btn z-btn-primary z-btn-sm' : 'z-btn z-btn-ghost z-btn-sm'}`}
+            className={`hidden md:inline-flex z-btn z-btn-primary z-btn-sm`}
           >
             {editingLayout ? 'Done' : 'Edit Layout'}
           </button>

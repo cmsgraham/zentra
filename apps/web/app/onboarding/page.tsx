@@ -208,14 +208,17 @@ export default function OnboardingPage() {
         style={{
           width: '100%',
           padding: '18px',
-          background: submitting ? 'var(--ink-text-muted)' : 'var(--ink-text)',
+          background: submitting ? 'var(--ink-text-muted)' : 'var(--ink-accent)',
           border: 'none',
-          borderRadius: '12px',
-          color: 'var(--ink-bg)',
+          borderRadius: '999px',
+          color: 'var(--ink-on-accent)',
           fontSize: '1.125rem',
           fontWeight: 700,
           cursor: submitting ? 'not-allowed' : 'pointer',
           letterSpacing: '0.02em',
+          boxShadow: submitting
+            ? 'none'
+            : '0 1px 2px color-mix(in srgb, var(--ink-accent) 20%, transparent), 0 12px 32px -12px color-mix(in srgb, var(--ink-accent) 45%, transparent)',
         }}
       >
         {submitting ? '...' : 'Start · 15 min'}

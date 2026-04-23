@@ -16,10 +16,15 @@ export default fp(async (app: FastifyInstance) => {
   
   await app.register(fjwt, {
     secret: env.JWT_SECRET,
+    cookie: {
+      cookieName: 'zentra_access',
+      signed: false,
+    },
   });
 
   app.decorate('authenticate', async (request: FastifyRequest) => {
     try {
+      // @fastify/jwt will check Authorization header first, then the configured cookie.
       await request.jwtVerify();
     } catch {
       throw new UnauthorizedError();

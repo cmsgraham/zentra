@@ -286,8 +286,7 @@ export default function AICalendarExtractModal({ date, onClose, onImported }: AI
                 </p>
                 <button
                   onClick={toggleAll}
-                  className="text-[10px] px-2 py-0.5 rounded transition-colors hover:opacity-80"
-                  style={{ color: 'var(--ink-accent)' }}
+                  className="z-btn z-btn-primary z-btn-xs"
                 >
                   {events.every(e => e.selected) ? 'Deselect All' : 'Select All'}
                 </button>

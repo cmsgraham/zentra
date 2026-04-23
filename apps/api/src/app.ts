@@ -1,5 +1,7 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import cookie from '@fastify/cookie';
+import helmet from '@fastify/helmet';
 import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import dbPlugin from './plugins/db.js';
@@ -7,8 +9,10 @@ import authPlugin from './plugins/auth.js';
 import s3Plugin from './plugins/s3.js';
 import redisPlugin from './plugins/redis.js';
 import { AppError } from './lib/errors.js';
+import { getEnv } from './lib/env.js';
 
 import authRoutes from './modules/auth/routes.js';
+import googleAuthRoutes from './modules/auth/google.js';
 import workspaceRoutes from './modules/workspaces/routes.js';
 import tagRoutes from './modules/tags/routes.js';
 import taskRoutes from './modules/tasks/routes.js';
@@ -34,12 +38,50 @@ export async function buildApp() {
   const app = Fastify({
     logger: {
       level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
+      redact: {
+        paths: [
+          'req.headers.authorization',
+          'req.headers.cookie',
+          'body.password',
+          'body.newPassword',
+          'body.currentPassword',
+          'body.refreshToken',
+          'body.token',
+          'body.code',
+          'resetToken',
+        ],
+        remove: true,
+      },
     },
+    trustProxy: true,
+  });
+
+  const env = getEnv();
+  const allowedOrigins = new Set(
+    [env.APP_URL, 'http://localhost:3000', 'http://127.0.0.1:3000']
+      .filter(Boolean),
+  );
+
+  // Security headers
+  await app.register(helmet, {
+    contentSecurityPolicy: false, // Caddy sets CSP at edge
+    crossOriginEmbedderPolicy: false,
+  });
+
+  // Cookies (HttpOnly auth tokens)
+  await app.register(cookie, {
+    secret: env.JWT_SECRET,
+    parseOptions: {},
   });
 
   // CORS
   await app.register(cors, {
-    origin: true,
+    origin: (origin, cb) => {
+      // Allow server-to-server / curl / same-origin (no Origin header)
+      if (!origin) return cb(null, true);
+      if (allowedOrigins.has(origin)) return cb(null, true);
+      return cb(new Error('Not allowed by CORS'), false);
+    },
     credentials: true,
   });
 
@@ -93,6 +135,7 @@ export async function buildApp() {
 
   // Routes
   await app.register(authRoutes, { prefix: '/auth' });
+  await app.register(googleAuthRoutes, { prefix: '/auth' });
   await app.register(workspaceRoutes);
   await app.register(tagRoutes);
   await app.register(taskRoutes);

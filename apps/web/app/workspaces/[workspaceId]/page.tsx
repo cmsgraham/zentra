@@ -47,6 +47,8 @@ export default function WorkspaceBoardPage() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showBulkEdit, setShowBulkEdit] = useState(false);
+  const [addingToTomorrow, setAddingToTomorrow] = useState(false);
+  const [tomorrowToast, setTomorrowToast] = useState<string | null>(null);
 
   // Search / filter state
   const [search, setSearch] = useState('');
@@ -67,6 +69,73 @@ export default function WorkspaceBoardPage() {
     setSelectionMode(false);
     setSelectedIds(new Set());
   }, []);
+
+  /**
+   * Take the currently-selected tasks and add them as goals on tomorrow's plan.
+   * Mirrors the add-task-as-goal flow in PlannerView: ensure a plan exists for
+   * the date via PUT /planner, then POST each task to /planner/:id/goals with
+   * a `linkedTaskId` so the planner UI can render them as linked intentions.
+   */
+  const addSelectedToTomorrow = useCallback(async () => {
+    if (selectedIds.size === 0 || addingToTomorrow) return;
+    const ids = Array.from(selectedIds);
+    // Tomorrow in the user's local calendar (YYYY-MM-DD).
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const date = tomorrow.toLocaleDateString('en-CA');
+    setAddingToTomorrow(true);
+    try {
+      const planRes = await api<{ plan: { id: string } }>('/planner', {
+        method: 'PUT',
+        body: { date },
+      });
+      const planId = planRes.plan.id;
+      // Fetch the plan's existing goals so we can pick a stable sortOrder and
+      // skip tasks that are already linked (avoids accidental duplicates if
+      // the user selects and hits the button twice).
+      const existing = await api<{ goals: { linkedTaskId: string | null }[] }>(
+        `/planner?date=${date}`,
+      ).catch(() => ({ goals: [] as { linkedTaskId: string | null }[] }));
+      const existingLinked = new Set(
+        (existing.goals ?? [])
+          .map((g) => g.linkedTaskId)
+          .filter((v): v is string => typeof v === 'string'),
+      );
+      let sortOrder = existing.goals?.length ?? 0;
+      let added = 0;
+      for (const id of ids) {
+        if (existingLinked.has(id)) continue;
+        const task = tasks.find((t) => t.id === id);
+        if (!task) continue;
+        await api(`/planner/${planId}/goals`, {
+          method: 'POST',
+          body: {
+            title: task.title,
+            linkedTaskId: task.id,
+            sortOrder: sortOrder++,
+            // Keep tasks as Open when planning tomorrow — they shouldn't
+            // flip to Present (in_progress) until the user actually starts.
+            skipAutoStart: true,
+          },
+        });
+        added++;
+      }
+      const skipped = ids.length - added;
+      const msg = added === 0
+        ? 'Already on tomorrow'
+        : skipped > 0
+          ? `Added ${added} to tomorrow · ${skipped} already there`
+          : `Added ${added} to tomorrow`;
+      setTomorrowToast(msg);
+      setTimeout(() => setTomorrowToast(null), 2500);
+      exitSelection();
+    } catch {
+      setTomorrowToast("Couldn't add to tomorrow");
+      setTimeout(() => setTomorrowToast(null), 2500);
+    } finally {
+      setAddingToTomorrow(false);
+    }
+  }, [selectedIds, addingToTomorrow, tasks, exitSelection]);
 
   // Blocked-reason prompt state
   const [pendingDrop, setPendingDrop] = useState<{ taskIds: string[]; status: string } | null>(null);
@@ -219,8 +288,12 @@ export default function WorkspaceBoardPage() {
     await moveTask(taskId, newStatus);
   }
 
-  async function handleQuickAdd(title: string) {
-    await api(`/workspaces/${workspaceId}/tasks`, {
+  const handleQuickAdd = useCallback(async (title: string) => {
+    // Optimistic: append the created task directly instead of refetching the
+    // entire list. Combined with the stable identity of QuickAddInput (memo'd
+    // child component with its own ref), this keeps the input DOM node intact
+    // across rapid-entry and lets focus stay put without any hacks.
+    const created = await api<TaskData>(`/workspaces/${workspaceId}/tasks`, {
       method: 'POST',
       body: {
         title,
@@ -231,8 +304,8 @@ export default function WorkspaceBoardPage() {
         assigneeId: user?.id || undefined,
       },
     });
-    await loadTasks();
-  }
+    setTasks((prev) => (prev.some((t) => t.id === created.id) ? prev : [...prev, created]));
+  }, [workspaceId, user?.taskDefaultPriority, user?.taskDefaultComplexity, user?.taskDefaultEstimatedMinutes, user?.id]);
 
   return (
     <AuthShell>
@@ -261,6 +334,25 @@ export default function WorkspaceBoardPage() {
                 >
                   Edit {selectedIds.size}
                 </button>
+              )}
+              {selectionMode && selectedIds.size > 0 && (
+                <button
+                  onClick={addSelectedToTomorrow}
+                  disabled={addingToTomorrow}
+                  className="z-btn"
+                  title="Add selected intentions as goals on tomorrow's plan"
+                >
+                  {addingToTomorrow ? 'Adding…' : `→ Tomorrow's goals (${selectedIds.size})`}
+                </button>
+              )}
+              {tomorrowToast && (
+                <span
+                  className="text-xs"
+                  style={{ color: 'var(--ink-text-muted)', paddingLeft: 4 }}
+                  role="status"
+                >
+                  {tomorrowToast}
+                </span>
               )}
               <button
                 onClick={() => setShowFilters((v) => !v)}
@@ -499,6 +591,7 @@ export default function WorkspaceBoardPage() {
         <BulkEditModal
           taskIds={Array.from(selectedIds)}
           members={members}
+          workspaces={workspaces}
           onClose={() => setShowBulkEdit(false)}
           onDone={() => {
             setShowBulkEdit(false);

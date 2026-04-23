@@ -30,6 +30,12 @@ const createGoalSchema = z.object({
   status: goalStatusEnum.default('pending'),
   linkedTaskId: z.string().uuid().optional(),
   sortOrder: z.number().int().default(0),
+  /**
+   * If true, linking a task to this goal will NOT auto-flip a pending task to
+   * in_progress. Used when pre-planning tomorrow's goals from the board so the
+   * tasks stay Open until the user actually starts working on them.
+   */
+  skipAutoStart: z.boolean().optional(),
 });
 
 const updateGoalSchema = z.object({
@@ -266,8 +272,9 @@ export default async function plannerRoutes(app: FastifyInstance) {
       [plannerId, body.title, body.status, body.linkedTaskId || null, body.sortOrder],
     );
 
-    // Auto-set linked task to in_progress if it's currently pending
-    if (body.linkedTaskId) {
+    // Auto-set linked task to in_progress if it's currently pending, unless
+    // the caller opted out (e.g. when pre-planning tomorrow's goals).
+    if (body.linkedTaskId && !body.skipAutoStart) {
       await app.pg.query(
         `UPDATE tasks SET status = 'in_progress'
          WHERE id = $1 AND status = 'pending'`,

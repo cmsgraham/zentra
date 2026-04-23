@@ -1,8 +1,8 @@
 'use client';
 
-import { useRef, useState } from 'react';
 import { useDroppable } from '@dnd-kit/core';
 import TaskCard, { type TaskData } from '../tasks/TaskCard';
+import QuickAddInput from './QuickAddInput';
 
 interface Props {
   title: string;
@@ -16,14 +16,14 @@ interface Props {
   selectedIds?: Set<string>;
   /** Task ids to visually dim (e.g. multi-drag siblings). */
   dimmedIds?: Set<string>;
+  /** Map of workspaceId → accent colour. Passed through to each TaskCard so
+   *  the cross-workspace "All" board can differentiate tasks visually. */
+  accentColorByWorkspace?: Record<string, string>;
   mobile?: boolean;
 }
 
-export default function BoardLane({ title, status, tasks, color, onTaskClick, onToggleDone, onQuickAdd, onToggleSelect, selectedIds, dimmedIds, mobile }: Props) {
+export default function BoardLane({ title, status, tasks, color, onTaskClick, onToggleDone, onQuickAdd, onToggleSelect, selectedIds, dimmedIds, accentColorByWorkspace, mobile }: Props) {
   const { setNodeRef, isOver } = useDroppable({ id: status });
-  const [quickTitle, setQuickTitle] = useState('');
-  const [adding, setAdding] = useState(false);
-  const quickInputRef = useRef<HTMLInputElement | null>(null);
 
   const tintMap: Record<string, string> = {
     pending: 'rgba(245, 158, 11, 0.04)',
@@ -76,30 +76,7 @@ export default function BoardLane({ title, status, tasks, color, onTaskClick, on
       >
         {onQuickAdd && (
           <div className="px-1 pb-2">
-            <input
-              ref={quickInputRef}
-              value={quickTitle}
-              onChange={(e) => setQuickTitle(e.target.value)}
-              onKeyDown={async (e) => {
-                if (e.key === 'Enter' && quickTitle.trim() && !adding) {
-                  e.preventDefault();
-                  setAdding(true);
-                  try {
-                    await onQuickAdd(quickTitle.trim());
-                    setQuickTitle('');
-                  } finally {
-                    setAdding(false);
-                    // Restore focus so the user can keep typing next intentions
-                    // without reaching for the mouse.
-                    requestAnimationFrame(() => quickInputRef.current?.focus());
-                  }
-                }
-              }}
-              placeholder="+ Add intention…"
-              readOnly={adding}
-              className="w-full text-xs bg-transparent outline-none px-2.5 py-2 rounded-lg"
-              style={{ color: 'var(--ink-text)', border: '1px dashed var(--ink-border-subtle)', opacity: adding ? 0.5 : 1 }}
-            />
+            <QuickAddInput onSubmit={onQuickAdd} />
           </div>
         )}
         {tasks.map((task) => (
@@ -111,6 +88,7 @@ export default function BoardLane({ title, status, tasks, color, onTaskClick, on
             onToggleSelect={onToggleSelect}
             selected={selectedIds?.has(task.id)}
             dimmed={dimmedIds?.has(task.id)}
+            accentColor={task.workspaceId ? accentColorByWorkspace?.[task.workspaceId] : undefined}
           />
         ))}
         {tasks.length === 0 && (
