@@ -20,10 +20,20 @@ export default function WelcomePage() {
   // Tiny breathing animation on the sigil, tied to real seconds so it feels
   // tied to the user's own breath, not a UI tick.
   const [breath, setBreath] = useState(0);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   useEffect(() => {
     const id = setInterval(() => setBreath((b) => (b + 1) % 2), 4200);
     return () => clearInterval(id);
   }, []);
+
+  // Lock body scroll when mobile menu is open
+  useEffect(() => {
+    if (mobileMenuOpen) {
+      const prev = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      return () => { document.body.style.overflow = prev; };
+    }
+  }, [mobileMenuOpen]);
 
   return (
     <div
@@ -53,12 +63,12 @@ export default function WelcomePage() {
 
       {/* ── Top bar ── */}
       <header
+        className="welcome-header"
         style={{
           position: 'relative',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          padding: '22px 28px',
           maxWidth: 1200,
           margin: '0 auto',
         }}
@@ -67,10 +77,13 @@ export default function WelcomePage() {
           <img
             src="/zentra_logo_azul.png"
             alt="Zentra"
-            style={{ height: 56, width: 'auto', display: 'block' }}
+            className="welcome-logo"
+            style={{ width: 'auto', display: 'block' }}
           />
         </div>
-        <nav style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
+
+        {/* Desktop nav */}
+        <nav className="welcome-nav-desktop" style={{ alignItems: 'center', gap: 18 }}>
           <a
             href="#why"
             style={{ fontSize: '0.8125rem', color: 'var(--ink-text-muted)', textDecoration: 'none' }}
@@ -97,7 +110,188 @@ export default function WelcomePage() {
             Enter Zentra
           </Link>
         </nav>
+
+        {/* Mobile menu trigger */}
+        <button
+          type="button"
+          aria-label="Open menu"
+          aria-expanded={mobileMenuOpen}
+          onClick={() => setMobileMenuOpen(true)}
+          className="welcome-menu-trigger"
+          style={{
+            background: 'transparent',
+            border: '1px solid var(--ink-border-subtle)',
+            borderRadius: 999,
+            width: 44,
+            height: 44,
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--ink-text)',
+            cursor: 'pointer',
+          }}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
+            <line x1="4" y1="8" x2="20" y2="8" />
+            <line x1="4" y1="16" x2="20" y2="16" />
+          </svg>
+        </button>
       </header>
+
+      {/* Mobile menu drawer */}
+      {mobileMenuOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="welcome-mobile-menu"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 60,
+            background:
+              'radial-gradient(ellipse at 50% 0%, color-mix(in srgb, var(--ink-accent) 14%, transparent) 0%, transparent 60%), var(--ink-bg-soft, var(--ink-bg))',
+            display: 'flex',
+            flexDirection: 'column',
+            animation: 'welcomeMenuIn 220ms ease-out',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '18px 24px',
+            }}
+          >
+            <img
+              src="/zentra_logo_azul.png"
+              alt="Zentra"
+              style={{ height: 40, width: 'auto', display: 'block' }}
+            />
+            <button
+              type="button"
+              aria-label="Close menu"
+              onClick={() => setMobileMenuOpen(false)}
+              style={{
+                background: 'transparent',
+                border: '1px solid var(--ink-border-subtle)',
+                borderRadius: 999,
+                width: 44,
+                height: 44,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--ink-text)',
+                cursor: 'pointer',
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
+                <line x1="6" y1="6" x2="18" y2="18" />
+                <line x1="18" y1="6" x2="6" y2="18" />
+              </svg>
+            </button>
+          </div>
+
+          <nav
+            style={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              padding: '32px 28px',
+              gap: 4,
+            }}
+          >
+            {[
+              { href: '#why', label: 'Why Zentra' },
+              { href: '#how', label: 'How it works' },
+              { href: '#science', label: 'The science' },
+            ].map((item) => (
+              <a
+                key={item.href}
+                href={item.href}
+                onClick={() => setMobileMenuOpen(false)}
+                style={{
+                  display: 'block',
+                  fontSize: '1.5rem',
+                  fontWeight: 300,
+                  letterSpacing: '-0.01em',
+                  color: 'var(--ink-text)',
+                  textDecoration: 'none',
+                  padding: '18px 0',
+                  borderBottom: '1px solid var(--ink-border-subtle)',
+                  minHeight: 44,
+                }}
+              >
+                {item.label}
+              </a>
+            ))}
+          </nav>
+
+          <div style={{ padding: '24px 28px 40px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <Link
+              href="/login"
+              onClick={() => setMobileMenuOpen(false)}
+              className="z-btn z-btn-primary"
+              style={{
+                width: '100%',
+                padding: '16px 20px',
+                fontSize: '0.9375rem',
+                textDecoration: 'none',
+                textAlign: 'center',
+              }}
+            >
+              Enter Zentra
+            </Link>
+            <Link
+              href="/signup"
+              onClick={() => setMobileMenuOpen(false)}
+              style={{
+                fontSize: '0.875rem',
+                color: 'var(--ink-text-muted)',
+                textDecoration: 'none',
+                textAlign: 'center',
+                padding: '12px',
+              }}
+            >
+              I'm new here — create an account
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {/* Mobile-only header overrides */}
+      <style jsx>{`
+        .welcome-header {
+          padding: 14px 20px;
+        }
+        .welcome-logo {
+          height: 56px;
+        }
+        .welcome-nav-desktop {
+          display: flex;
+        }
+        .welcome-menu-trigger {
+          display: none;
+        }
+        @media (max-width: 768px) {
+          .welcome-header {
+            padding: 14px 20px;
+            min-height: 60px;
+          }
+          .welcome-logo {
+            height: 40px;
+          }
+          .welcome-nav-desktop {
+            display: none;
+          }
+          .welcome-menu-trigger {
+            display: inline-flex;
+          }
+        }
+        @keyframes welcomeMenuIn {
+          from { opacity: 0; transform: translateY(-8px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
 
       {/* ── Hero ── */}
       <section
