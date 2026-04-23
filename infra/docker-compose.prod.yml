@@ -25,6 +25,7 @@ services:
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
         API_INTERNAL_URL: http://api:4000
+        NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION: ${NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION:-}
     container_name: zentra-web
     restart: unless-stopped
     expose:
