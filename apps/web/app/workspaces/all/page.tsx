@@ -48,12 +48,18 @@ export default function AllWorkspacesBoardPage() {
   const [collapsedLanes, setCollapsedLanes] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
 
-  // Multi-select state (bulk edit + add-to-tomorrow)
+  // Multi-select state (bulk edit + add-to-date)
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showBulkEdit, setShowBulkEdit] = useState(false);
-  const [addingToTomorrow, setAddingToTomorrow] = useState(false);
-  const [tomorrowToast, setTomorrowToast] = useState<string | null>(null);
+  const [addingToDate, setAddingToDate] = useState(false);
+  const [dateToast, setDateToast] = useState<string | null>(null);
+  // Default the picker to today (user's local calendar). Most adds target
+  // today's plan; users can still pick tomorrow or any other date.
+  const [targetDate, setTargetDate] = useState<string>(() => {
+    return new Date().toLocaleDateString('en-CA');
+  });
+  const [showDatePicker, setShowDatePicker] = useState(false);
 
   // Filters
   const [search, setSearch] = useState('');
@@ -62,7 +68,7 @@ export default function AllWorkspacesBoardPage() {
   const [showFilters, setShowFilters] = useState(false);
 
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(PointerSensor, { activationConstraint: { distance: 3 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
   );
 
@@ -122,7 +128,7 @@ export default function AllWorkspacesBoardPage() {
     if (workspaceFilter && t.workspaceId !== workspaceFilter) return false;
     return true;
   });
-  const filteredByStatus = (status: string) => filteredTasks.filter((t) => t.status === status);
+  const filteredByStatus = (status: string) => sortByLane(filteredTasks.filter((t) => t.status === status));
   const hasActiveFilters = !!(search.trim() || priorityFilter || workspaceFilter);
 
   const dimmedIds: Set<string> | undefined = (() => {
@@ -138,8 +144,8 @@ export default function AllWorkspacesBoardPage() {
     setActiveTask(task ?? null);
   }
 
-  async function moveTask(taskId: string, newStatus: string, extra?: Record<string, string>) {
-    setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, status: newStatus, ...extra } : t)));
+  async function moveTask(taskId: string, newStatus: string, extra?: Record<string, unknown>) {
+    setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, status: newStatus, ...(extra as Partial<TaskData>) } : t)));
     try {
       await api(`/tasks/${taskId}`, { method: 'PATCH', body: { status: newStatus, ...extra } });
     } catch {
@@ -147,11 +153,11 @@ export default function AllWorkspacesBoardPage() {
     }
   }
 
-  async function moveTasksBulk(taskIds: string[], newStatus: string, extra?: Record<string, string>) {
+  async function moveTasksBulk(taskIds: string[], newStatus: string, extra?: Record<string, unknown>) {
     if (taskIds.length === 0) return;
     if (taskIds.length === 1) return moveTask(taskIds[0], newStatus, extra);
     const idSet = new Set(taskIds);
-    setTasks((prev) => prev.map((t) => (idSet.has(t.id) ? { ...t, status: newStatus, ...extra } : t)));
+    setTasks((prev) => prev.map((t) => (idSet.has(t.id) ? { ...t, status: newStatus, ...(extra as Partial<TaskData>) } : t)));
     try {
       await api('/tasks/bulk', { method: 'PATCH', body: { taskIds, updates: { status: newStatus, ...(extra || {}) } } });
     } catch {
@@ -168,26 +174,119 @@ export default function AllWorkspacesBoardPage() {
     const { active, over } = event;
     if (!over) return;
     const draggedId = active.id as string;
-    const newStatus = over.id as string;
+    const overId = String(over.id);
     const dragged = tasks.find((t) => t.id === draggedId);
     if (!dragged) return;
 
-    const dragIds = selectionMode && selectedIds.has(draggedId)
-      ? Array.from(selectedIds)
-      : [draggedId];
-    const idsToMove = dragIds.filter((id) => {
-      const t = tasks.find((x) => x.id === id);
-      return t && t.status !== newStatus;
-    });
-    if (idsToMove.length === 0) return;
+    const overTask = overId !== draggedId ? tasks.find((t) => t.id === overId) : null;
+    const newStatus = overTask ? overTask.status : overId;
+    const isStatusTarget = !overTask && lanes.some((l) => l.status === newStatus);
+    if (!overTask && !isStatusTarget) return;
 
-    if (newStatus === 'blocked') {
-      setPendingDrop({ taskIds: idsToMove, status: newStatus });
+    const isMulti = selectionMode && selectedIds.has(draggedId) && selectedIds.size > 1;
+
+    if (isMulti) {
+      const dragIds = Array.from(selectedIds);
+      const idsToMove = dragIds.filter((id) => {
+        const t = tasks.find((x) => x.id === id);
+        return t && t.status !== newStatus;
+      });
+      if (idsToMove.length === 0) return;
+      if (newStatus === 'blocked') {
+        setPendingDrop({ taskIds: idsToMove, status: newStatus });
+        setBlockedReason('');
+        return;
+      }
+      moveTasksBulk(idsToMove, newStatus);
+      exitSelection();
+      return;
+    }
+
+    const statusChanged = dragged.status !== newStatus;
+    const reorderedIds = computeReorderedLane(dragged, newStatus, overTask?.id);
+    if (!reorderedIds) return;
+    if (statusChanged && newStatus === 'blocked') {
+      setPendingDrop({ taskIds: [draggedId], status: newStatus });
       setBlockedReason('');
       return;
     }
-    moveTasksBulk(idsToMove, newStatus);
-    if (selectionMode && idsToMove.length > 1) exitSelection();
+    reorderLane(draggedId, newStatus, reorderedIds);
+  }
+
+  async function reorderLane(
+    draggedId: string,
+    newStatus: string,
+    reorderedIds: string[],
+  ) {
+    const SPACING = 1024;
+    const updates = reorderedIds.map((id, idx) => ({ id, laneOrder: (idx + 1) * SPACING }));
+    setTasks((prev) =>
+      prev.map((t) => {
+        const u = updates.find((x) => x.id === t.id);
+        if (!u) return t;
+        return { ...t, laneOrder: u.laneOrder, status: t.id === draggedId ? newStatus : t.status };
+      }),
+    );
+    try {
+      await api(`/tasks/${draggedId}`, {
+        method: 'PATCH',
+        body: { status: newStatus, laneOrder: updates.find((u) => u.id === draggedId)!.laneOrder },
+      });
+      await Promise.all(
+        updates
+          .filter((u) => u.id !== draggedId)
+          .map((u) =>
+            api(`/tasks/${u.id}`, { method: 'PATCH', body: { laneOrder: u.laneOrder } }),
+          ),
+      );
+    } catch {
+      await loadAll();
+    }
+  }
+
+  function sortByLane(list: TaskData[]): TaskData[] {
+    return [...list].sort((a, b) => {
+      const aHas = a.laneOrder !== null && a.laneOrder !== undefined;
+      const bHas = b.laneOrder !== null && b.laneOrder !== undefined;
+      if (aHas && bHas) return (a.laneOrder as number) - (b.laneOrder as number);
+      if (aHas) return -1;
+      if (bHas) return 1;
+      return 0;
+    });
+  }
+
+  function computeReorderedLane(
+    dragged: TaskData,
+    newStatus: string,
+    overTaskId: string | undefined,
+  ): string[] | null {
+    const targetLane = sortByLane(
+      tasks.filter((t) => t.status === newStatus && t.id !== dragged.id),
+    );
+    let insertAt = targetLane.length;
+    if (overTaskId) {
+      const idx = targetLane.findIndex((t) => t.id === overTaskId);
+      if (idx >= 0) {
+        const draggedIdx = sortByLane(
+          tasks.filter((t) => t.status === newStatus),
+        ).findIndex((t) => t.id === dragged.id);
+        const sameLane = dragged.status === newStatus && draggedIdx >= 0;
+        const dropAfter = sameLane && draggedIdx < idx;
+        insertAt = dropAfter ? idx + 1 : idx;
+      }
+    }
+    const reordered = [
+      ...targetLane.slice(0, insertAt).map((t) => t.id),
+      dragged.id,
+      ...targetLane.slice(insertAt).map((t) => t.id),
+    ];
+    if (dragged.status === newStatus) {
+      const original = sortByLane(tasks.filter((t) => t.status === newStatus)).map((t) => t.id);
+      if (original.length === reordered.length && original.every((id, i) => id === reordered[i])) {
+        return null;
+      }
+    }
+    return reordered;
   }
 
   function handleBlockedConfirm() {
@@ -210,14 +309,11 @@ export default function AllWorkspacesBoardPage() {
     setCollapsedLanes((prev) => ({ ...prev, [status]: !prev[status] }));
   };
 
-  /** Mirror of the single-workspace board: add selected tasks as tomorrow's goals. */
-  const addSelectedToTomorrow = useCallback(async () => {
-    if (selectedIds.size === 0 || addingToTomorrow) return;
+  /** Mirror of the single-workspace board: add selected tasks as goals on a chosen date. */
+  const addSelectedToDate = useCallback(async (date: string) => {
+    if (selectedIds.size === 0 || addingToDate || !date) return;
     const ids = Array.from(selectedIds);
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const date = tomorrow.toLocaleDateString('en-CA');
-    setAddingToTomorrow(true);
+    setAddingToDate(true);
     try {
       const planRes = await api<{ plan: { id: string } }>('/planner', {
         method: 'PUT',
@@ -251,20 +347,21 @@ export default function AllWorkspacesBoardPage() {
       }
       const skipped = ids.length - added;
       const msg = added === 0
-        ? 'Already on tomorrow'
+        ? `Already on ${date}`
         : skipped > 0
-          ? `Added ${added} to tomorrow · ${skipped} already there`
-          : `Added ${added} to tomorrow`;
-      setTomorrowToast(msg);
-      setTimeout(() => setTomorrowToast(null), 2500);
+          ? `Added ${added} to ${date} · ${skipped} already there`
+          : `Added ${added} to ${date}`;
+      setDateToast(msg);
+      setTimeout(() => setDateToast(null), 2500);
+      setShowDatePicker(false);
       exitSelection();
     } catch {
-      setTomorrowToast("Couldn't add to tomorrow");
-      setTimeout(() => setTomorrowToast(null), 2500);
+      setDateToast("Couldn't add to that date");
+      setTimeout(() => setDateToast(null), 2500);
     } finally {
-      setAddingToTomorrow(false);
+      setAddingToDate(false);
     }
-  }, [selectedIds, addingToTomorrow, tasks, exitSelection]);
+  }, [selectedIds, addingToDate, tasks, exitSelection]);
 
   // Drawer needs the task's own workspaceId
   const selectedTask = selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) : null;
@@ -299,18 +396,53 @@ export default function AllWorkspacesBoardPage() {
                   </button>
                 )}
                 {selectionMode && selectedIds.size > 0 && (
-                  <button
-                    onClick={addSelectedToTomorrow}
-                    disabled={addingToTomorrow}
-                    className="z-btn"
-                    title="Add selected intentions as goals on tomorrow's plan"
-                  >
-                    {addingToTomorrow ? 'Adding…' : `→ Tomorrow's goals (${selectedIds.size})`}
-                  </button>
+                  <div style={{ position: 'relative', display: 'inline-block' }}>
+                    <button
+                      onClick={() => setShowDatePicker((v) => !v)}
+                      disabled={addingToDate}
+                      className="z-btn"
+                      title="Add selected intentions as goals on a chosen date's plan"
+                    >
+                      {addingToDate ? 'Adding…' : `→ Add to date (${selectedIds.size})`}
+                    </button>
+                    {showDatePicker && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          top: 'calc(100% + 6px)',
+                          right: 0,
+                          zIndex: 30,
+                          background: 'var(--ink-bg-elev)',
+                          border: '1px solid var(--ink-border)',
+                          borderRadius: 8,
+                          padding: 8,
+                          display: 'flex',
+                          gap: 6,
+                          alignItems: 'center',
+                          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                        }}
+                      >
+                        <input
+                          type="date"
+                          value={targetDate}
+                          onChange={(e) => setTargetDate(e.target.value)}
+                          className="z-input"
+                          style={{ fontSize: 13 }}
+                        />
+                        <button
+                          onClick={() => addSelectedToDate(targetDate)}
+                          disabled={addingToDate || !targetDate}
+                          className="z-btn z-btn-primary"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 )}
-                {tomorrowToast && (
+                {dateToast && (
                   <span className="text-xs" style={{ color: 'var(--ink-text-muted)', paddingLeft: 4 }} role="status">
-                    {tomorrowToast}
+                    {dateToast}
                   </span>
                 )}
                 <button

@@ -3,6 +3,52 @@ import { BadRequestError } from '../../lib/errors.js';
 import { assertAllowedImage } from '../../lib/file-validation.js';
 import { getEnv } from '../../lib/env.js';
 
+/**
+ * Convert a local wall-clock date+time in the given IANA timezone to a UTC ISO
+ * string. E.g. localInTimezoneToUtcIso('2026-04-23', '14:00', 'America/New_York')
+ * returns the ISO instant when a clock in New York reads 14:00 on that date.
+ *
+ * Uses only the platform Intl API; no dependencies.
+ */
+function localInTimezoneToUtcIso(dateStr: string, timeStr: string, tz: string): string | null {
+  // dateStr: 'YYYY-MM-DD', timeStr: 'HH:mm'
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr) || !/^\d{1,2}:\d{2}$/.test(timeStr)) return null;
+  const [hh, mm] = timeStr.split(':').map((n) => parseInt(n, 10));
+  const [y, mo, d] = dateStr.split('-').map((n) => parseInt(n, 10));
+  if ([y, mo, d, hh, mm].some((n) => Number.isNaN(n))) return null;
+
+  // Start by treating the wall clock as if it were UTC, then subtract the tz
+  // offset at that instant to arrive at the true UTC time.
+  const asUtcMs = Date.UTC(y, mo - 1, d, hh, mm, 0);
+
+  try {
+    const dtf = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hour12: false,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
+    const parts = dtf.formatToParts(new Date(asUtcMs));
+    const map: Record<string, string> = {};
+    for (const p of parts) map[p.type] = p.value;
+    // Intl can emit '24' for midnight in some locales; normalise.
+    const hourVal = map.hour === '24' ? 0 : parseInt(map.hour, 10);
+    const tzAsIfUtcMs = Date.UTC(
+      parseInt(map.year, 10),
+      parseInt(map.month, 10) - 1,
+      parseInt(map.day, 10),
+      hourVal,
+      parseInt(map.minute, 10),
+      parseInt(map.second, 10),
+    );
+    const offsetMs = tzAsIfUtcMs - asUtcMs;
+    return new Date(asUtcMs - offsetMs).toISOString();
+  } catch {
+    // Unknown timezone — fall back to treating as UTC (old behaviour).
+    return new Date(asUtcMs).toISOString();
+  }
+}
+
 const SYSTEM_PROMPT = `You are an AI system that extracts calendar events from images.
 
 The user will upload a screenshot of a schedule.
@@ -156,16 +202,21 @@ export default async function appointmentAIRoutes(app: FastifyInstance) {
     const userId = request.user.sub;
     const created: any[] = [];
 
+    // Resolve user's timezone once so the wall-clock times extracted from the
+    // screenshot are interpreted in the user's zone (not server UTC).
+    const tzRow = await app.pg.query(`SELECT timezone FROM users WHERE id = $1`, [userId]);
+    const userTz: string = tzRow.rows[0]?.timezone || 'UTC';
+
     for (const event of body.events) {
       if (!event.title || !event.date || !event.start) continue;
 
-      const startsAt = new Date(`${event.date}T${event.start}:00`).toISOString();
+      const startsAt = localInTimezoneToUtcIso(event.date, event.start, userTz);
       const endsAt = event.end
-        ? new Date(`${event.date}T${event.end}:00`).toISOString()
+        ? localInTimezoneToUtcIso(event.date, event.end, userTz)
         : null;
 
       // Validate date
-      if (isNaN(new Date(startsAt).getTime())) continue;
+      if (!startsAt || isNaN(new Date(startsAt).getTime())) continue;
       if (endsAt && isNaN(new Date(endsAt).getTime())) continue;
 
       const result = await app.pg.query(

@@ -7,7 +7,6 @@ import { useFocusStore } from '@/lib/useFocusStore';
 import { useRouter } from 'next/navigation';
 import { EmptyPriorityPrompt } from './EmptyPriorityPrompt';
 import { StartButton } from './StartButton';
-import { NextActionInput } from './NextActionInput';
 import { FocusSession } from './FocusSession';
 import { CompleteDayView } from './CompleteDayView';
 import { SoftUrgencyBadge } from './SoftUrgencyBadge';
@@ -50,23 +49,27 @@ export function TodayView() {
     try {
       // Fetch priority + session authoritatively (no silent fallback). Stats are non-critical.
       const [priorityRes, sessionRes, statsRes] = await Promise.all([
-        api<{ task: PriorityTask | null }>('/priority/today'),
-        api<{ session: ActiveSession | null }>('/focus/sessions/active'),
-        api<{ completedCount: number; totalMinutes: number }>('/focus/sessions/today').catch(() => ({ completedCount: 0, totalMinutes: 0 })),
+        api<{ task: PriorityTask | null } | null>('/priority/today'),
+        api<{ session: ActiveSession | null } | null>('/focus/sessions/active'),
+        api<{ completedCount: number; totalMinutes: number } | null>('/focus/sessions/today').catch(() => ({ completedCount: 0, totalMinutes: 0 })),
       ]);
+
+      // Offline + no cached data: keep showing loader rather than crashing into error state.
+      if (!priorityRes || !sessionRes) return;
 
       const priorityTask = priorityRes.task;
       const activeSession = sessionRes.session;
+      const safeStats = statsRes ?? { completedCount: 0, totalMinutes: 0 };
 
       setPriority(priorityTask);
       setSession(activeSession);
-      setStats({ completedCount: statsRes.completedCount, totalMinutes: statsRes.totalMinutes });
+      setStats({ completedCount: safeStats.completedCount, totalMinutes: safeStats.totalMinutes });
 
       if (activeSession) {
         setState('focused');
       } else if (!priorityTask) {
         // If the user has completed sessions today but no current priority, show Complete.
-        setState(statsRes.completedCount > 0 ? 'complete' : 'empty');
+        setState(safeStats.completedCount > 0 ? 'complete' : 'empty');
       } else if (priorityTask.nextActionState === 'done') {
         setState('complete');
       } else {
@@ -121,19 +124,6 @@ export function TodayView() {
       await syncFocusStore();
     } finally {
       setStartLoading(false);
-    }
-  }
-
-  async function handleNextActionSave(nextAction: string) {
-    if (!priority) return;
-    try {
-      const res = await api<PriorityTask>(`/tasks/${priority.id}/next-action`, {
-        method: 'PATCH',
-        body: JSON.stringify({ nextAction }),
-      });
-      setPriority((p) => p ? { ...p, nextAction, nextActionState: 'set' } : p);
-    } catch {
-      // ignore
     }
   }
 
@@ -254,7 +244,8 @@ export function TodayView() {
     );
   }
 
-  // Primed state
+  // Primed state — pure execution. No input, no dropdown, no suggestions.
+  // Once a priority is set, the system protects the decision and guides the user into action.
   return (
     <div
       style={{
@@ -270,7 +261,7 @@ export function TodayView() {
       {/* Header row */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h1 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--ink-text)', margin: 0 }}>
-          Flow
+          Today&apos;s focus
         </h1>
         <SoftUrgencyBadge endOfDayTime={endOfDay} />
       </div>
@@ -287,27 +278,12 @@ export function TodayView() {
         )}
       </div>
 
-      {/* If next action is unclear, show the input — but also allow starting right away */}
-      {(!priority?.nextAction || priority.nextActionState === 'unclear') && priority ? (
-        <>
-          <NextActionInput
-            taskId={priority.id}
-            value={priority.nextAction}
-            onSave={handleNextActionSave}
-          />
-          <StartButton
-            onClick={handleStartSession}
-            loading={startLoading}
-            plannedMinutes={defaultSession}
-          />
-        </>
-      ) : (
-        <StartButton
-          onClick={handleStartSession}
-          loading={startLoading}
-          plannedMinutes={defaultSession}
-        />
-      )}
+      {/* Single primary action — start the focus session. No editing, no picking. */}
+      <StartButton
+        onClick={handleStartSession}
+        loading={startLoading}
+        plannedMinutes={defaultSession}
+      />
 
       {/* Change priority */}
       <button

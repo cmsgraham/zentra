@@ -1,6 +1,6 @@
 'use client';
 
-import { useDraggable } from '@dnd-kit/core';
+import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
 export interface TaskData {
@@ -15,8 +15,11 @@ export interface TaskData {
   tags?: string[];
   hasSegments?: boolean;
   segmentProgress?: { completed: number; total: number } | null;
+  createdAt?: string;
   workspaceId?: string;
   workspaceName?: string;
+  /** Optional ordering within a lane. Lower values render first; nulls last. */
+  laneOrder?: number | null;
 }
 
 interface Props {
@@ -31,6 +34,8 @@ interface Props {
   /** Optional per-workspace accent colour — rendered as a thin left border to
    *  differentiate tasks from different workspaces on the aggregated board. */
   accentColor?: string;
+  /** 1-based position within its lane — rendered as a priority number badge. */
+  rowNumber?: number;
 }
 
 function formatDate(dateStr: string): string {
@@ -44,8 +49,15 @@ function formatDate(dateStr: string): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-export default function TaskCard({ task, onClick, onToggleDone, onToggleSelect, selected, isDragOverlay, dimmed, accentColor }: Props) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+function formatCreatedDate(dateStr?: string): string | null {
+  if (!dateStr) return null;
+  const date = new Date(dateStr);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+export default function TaskCard({ task, onClick, onToggleDone, onToggleSelect, selected, isDragOverlay, dimmed, accentColor, rowNumber }: Props) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging, isOver, activeIndex, overIndex } = useSortable({
     id: task.id,
     data: { task },
   });
@@ -55,15 +67,41 @@ export default function TaskCard({ task, onClick, onToggleDone, onToggleSelect, 
   const todayStr = new Date().toLocaleDateString('en-CA');
   const isOverdue = !isDone && dueParts && dueParts < todayStr;
   const showPriority = task.priority === 'high' || task.priority === 'critical';
+  const createdLabel = formatCreatedDate(task.createdAt);
+
+  // Drop indicator: when another card is hovering over this one, show a thin
+  // accent line on the side where the dragged card will land.
+  // - Cross-lane drag (activeIndex === -1): indicator at top (we always
+  //   insert *before* the over-card; matches computeLaneOrder logic).
+  // - Same-lane drag downward (activeIndex < overIndex): indicator at bottom.
+  // - Same-lane drag upward (activeIndex > overIndex): indicator at top.
+  const showIndicator = isOver && !isDragging && !isDragOverlay;
+  const indicatorBelow =
+    showIndicator && activeIndex !== -1 && activeIndex < overIndex;
+  const indicatorAbove = showIndicator && !indicatorBelow;
 
   const style: React.CSSProperties = {
     transform: CSS.Translate.toString(transform),
+    transition,
     opacity: isDragging || dimmed ? 0.3 : 1,
+    position: 'relative',
     ...(isDragOverlay ? { background: 'var(--ink-surface)', boxShadow: '0 4px 16px rgba(0,0,0,0.10)', borderRadius: '8px', padding: '12px 14px' } : {}),
     ...(selected ? { outline: '2px solid var(--ink-accent, #3b82f6)', outlineOffset: '-2px', borderRadius: '8px' } : {}),
     ...(accentColor
       ? { borderLeft: `3px solid ${accentColor}`, paddingLeft: '9px', borderRadius: '4px' }
       : {}),
+  };
+
+  const indicatorStyle: React.CSSProperties = {
+    position: 'absolute',
+    left: 4,
+    right: 4,
+    height: 3,
+    background: 'var(--ink-accent, #3b82f6)',
+    borderRadius: 2,
+    pointerEvents: 'none',
+    zIndex: 5,
+    boxShadow: '0 0 0 2px var(--ink-bg)',
   };
 
   const meta: string[] = [];
@@ -78,6 +116,33 @@ export default function TaskCard({ task, onClick, onToggleDone, onToggleSelect, 
       className="task-item group"
       style={style}
     >
+      {indicatorAbove && <div style={{ ...indicatorStyle, top: -2 }} />}
+      {indicatorBelow && <div style={{ ...indicatorStyle, bottom: -2 }} />}
+      {/* Priority / row number */}
+      {rowNumber !== undefined && (
+        <span
+          className="task-row-number"
+          aria-label={`Priority ${rowNumber}`}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minWidth: 20,
+            height: 20,
+            padding: '0 6px',
+            marginRight: 8,
+            fontSize: 11,
+            fontWeight: 600,
+            fontVariantNumeric: 'tabular-nums',
+            color: 'var(--ink-text-muted)',
+            background: 'var(--ink-surface-hover, rgba(0,0,0,0.04))',
+            borderRadius: 10,
+            flexShrink: 0,
+          }}
+        >
+          {rowNumber}
+        </span>
+      )}
       {/* Checkbox */}
       <button
         className="task-checkbox"
@@ -107,8 +172,9 @@ export default function TaskCard({ task, onClick, onToggleDone, onToggleSelect, 
         <span className={`task-title ${isDone ? 'task-done' : ''}`}>
           {task.title}
         </span>
-        {(meta.length > 0 || (task.blockedReason && task.status === 'blocked')) && (
+        {(createdLabel || meta.length > 0 || (task.blockedReason && task.status === 'blocked')) && (
           <div className="task-meta">
+            {createdLabel && <span>{createdLabel}</span>}
             {meta.map((m, i) => (
               <span
                 key={m}

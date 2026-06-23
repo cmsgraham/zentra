@@ -68,13 +68,13 @@ export default function RemindersPage() {
 
   async function load() {
     const [r, f, w] = await Promise.all([
-      api<{ items: Reminder[] }>('/reminders'),
-      api<{ items: Friend[] }>('/friends').catch(() => ({ items: [] })),
-      api<{ items: Workspace[] }>('/workspaces').catch(() => ({ items: [] })),
+      api<{ items: Reminder[] } | null>('/reminders').catch(() => null),
+      api<{ items: Friend[] } | null>('/friends').catch(() => null),
+      api<{ items: Workspace[] } | null>('/workspaces').catch(() => null),
     ]);
-    setReminders(r.items);
-    setFriends(f.items);
-    setWorkspaces(w.items);
+    if (r && r.items) setReminders(r.items);
+    if (f && f.items) setFriends(f.items);
+    if (w && w.items) setWorkspaces(w.items);
   }
 
   useEffect(() => { if (user) load(); }, [user]);
@@ -198,26 +198,19 @@ export default function RemindersPage() {
 
         {/* Create form */}
         <form onSubmit={handleCreate} className="rounded-xl p-4 mb-6" style={{ background: 'var(--ink-surface)', border: '1px solid var(--ink-border-subtle)' }}>
-          <input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && title.trim()) {
-                e.preventDefault();
-                handleCreate(e);
-              }
-            }}
-            placeholder="Add an echo… (press Enter)"
-            className="w-full text-sm bg-transparent outline-none mb-2"
-            style={{ color: 'var(--ink-text)' }}
-          />
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 mb-2">
             <input
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Notes (optional)"
-              className="flex-1 min-w-0 text-xs bg-transparent outline-none px-2 py-1.5 rounded-md"
-              style={{ color: 'var(--ink-text-secondary)', border: '1px solid var(--ink-border-subtle)' }}
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey && title.trim()) {
+                  e.preventDefault();
+                  handleCreate(e);
+                }
+              }}
+              placeholder="Add an echo… (press Enter)"
+              className="flex-1 min-w-0 text-sm bg-transparent outline-none"
+              style={{ color: 'var(--ink-text)' }}
             />
             <input
               type="datetime-local"
@@ -235,6 +228,13 @@ export default function RemindersPage() {
               Add
             </button>
           </div>
+          <input
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="Notes (optional)"
+            className="w-full text-xs bg-transparent outline-none px-2 py-1.5 rounded-md"
+            style={{ color: 'var(--ink-text-secondary)', border: '1px solid var(--ink-border-subtle)' }}
+          />
         </form>
 
         {/* Filters */}

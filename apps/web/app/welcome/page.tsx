@@ -575,7 +575,11 @@ export default function WelcomePage() {
         }}
       >
         <div style={{ display: 'flex', gap: 10, justifyContent: 'center', alignItems: 'center' }}>
-          <Sigil small />
+          <img
+            src="/zentra_logo_azul.png"
+            alt="Zentra"
+            style={{ height: 22, width: 'auto', display: 'inline-block', verticalAlign: 'middle' }}
+          />
           <span>Zentra · a calmer way to move forward</span>
         </div>
         <div

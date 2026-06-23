@@ -1,5 +1,35 @@
 @import "tailwindcss";
 
+/* Self-hosted Inter font (offline support) */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/Inter-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/Inter-Medium.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/Inter-SemiBold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/Inter-Bold.woff2') format('woff2');
+}
+
 /* ═══════════════════════════════════════════════
    Zentra Design System
    ═══════════════════════════════════════════════ */
@@ -103,6 +133,14 @@ body {
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--ink-border) transparent;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
 ::selection {
@@ -320,7 +358,7 @@ body {
 /* ═══ Board — task list ═══ */
 
 .board-lane-drop {
-  flex: 1;
+  flex: 1 1 0;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -328,6 +366,8 @@ body {
   padding: 2px 0;
   border-radius: var(--ink-radius-md);
   transition: background 0.15s ease;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .task-item {

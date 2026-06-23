@@ -1,0 +1,36 @@
+{
+  "name": "Zentra",
+  "short_name": "Zentra",
+  "description": "Your daily control system — tasks, planner, shopping lists.",
+  "start_url": "/today",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#191f4a",
+  "icons": [
+    {
+      "src": "/zentra_logo_azul.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/zentra_logo_azul.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/zentra_logo_azul.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    { "name": "Today", "url": "/today" },
+    { "name": "Lists", "url": "/lists" },
+    { "name": "Planner", "url": "/planner" }
+  ]
+}

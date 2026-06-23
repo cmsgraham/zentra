@@ -43,7 +43,7 @@ export default async function workspaceRoutes(app: FastifyInstance) {
        FROM workspaces w
        JOIN workspace_members wm ON wm.workspace_id = w.id
        WHERE wm.user_id = $1
-       ORDER BY w.created_at DESC
+       ORDER BY lower(w.name) ASC
        LIMIT $2 OFFSET $3`,
       [userId, pageSize, offset],
     );
@@ -118,6 +118,31 @@ export default async function workspaceRoutes(app: FastifyInstance) {
     if (result.rows.length === 0) throw new NotFoundError('Workspace not found');
     const ws = result.rows[0];
     return { id: ws.id, name: ws.name, role, createdAt: ws.created_at };
+  });
+
+  // Delete workspace (owner only).
+  app.delete('/workspaces/:workspaceId', { preHandler: [app.authenticate] }, async (request, reply) => {
+    const { workspaceId } = request.params as { workspaceId: string };
+    const userId = request.user.sub;
+
+    const membership = await app.pg.query(
+      `SELECT role FROM workspace_members
+       WHERE workspace_id = $1 AND user_id = $2`,
+      [workspaceId, userId],
+    );
+    if (membership.rows.length === 0) throw new NotFoundError('Workspace not found');
+    const role = membership.rows[0].role;
+    if (role !== 'owner') {
+      throw new ForbiddenError('Only the owner can delete a workspace');
+    }
+
+    const result = await app.pg.query(
+      `DELETE FROM workspaces WHERE id = $1 RETURNING id`,
+      [workspaceId],
+    );
+    if (result.rows.length === 0) throw new NotFoundError('Workspace not found');
+    reply.code(204);
+    return null;
   });
 
   // Invite member

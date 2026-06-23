@@ -158,20 +158,21 @@ export default function PlannerView({ workspaceId, workspaceName }: PlannerViewP
   const loadPlannerData = useCallback(async () => {
     loadedRef.current = false;
     const [data, flowPriority] = await Promise.all([
-      api<{ plan: PlanData | null; goals: GoalData[] }>(`/planner?date=${selectedDate}`),
-      api<{ task: { title: string } | null }>('/priority/today').catch(() => ({ task: null })),
+      api<{ plan: PlanData | null; goals: GoalData[] } | null>(`/planner?date=${selectedDate}`),
+      api<{ task: { title: string } | null } | null>('/priority/today').catch(() => ({ task: null })),
     ]);
+    if (!data) return;
     setPlan(data.plan);
     setGoals(data.goals);
     if (data.plan) {
       setMood(data.plan.mood ?? '');
-      setTopPriority(data.plan.topPriorityText ?? flowPriority.task?.title ?? '');
+      setTopPriority(data.plan.topPriorityText ?? flowPriority?.task?.title ?? '');
       setPlanNotes(data.plan.notes ?? '');
       setReflection(data.plan.reflection ?? '');
       setTomorrowNotes(data.plan.tomorrowNotes ?? '');
     } else {
       setMood('');
-      setTopPriority(flowPriority.task?.title ?? '');
+      setTopPriority(flowPriority?.task?.title ?? '');
       setPlanNotes(''); setReflection(''); setTomorrowNotes('');
     }
     setTimeout(() => { loadedRef.current = true; }, 50);
@@ -179,16 +180,18 @@ export default function PlannerView({ workspaceId, workspaceName }: PlannerViewP
 
   // Load appointments — always global
   const loadAppointments = useCallback(async () => {
-    const data = await api<{ items: AppointmentData[] }>(`/appointments?date=${selectedDate}`);
+    const data = await api<{ items: AppointmentData[] } | null>(`/appointments?date=${selectedDate}`);
+    if (!data) return;
     setAppointments(data.items);
   }, [selectedDate]);
 
   // Load tasks — filtered by workspace when provided
   const loadTasks = useCallback(async () => {
     const [dueData, overdueData] = await Promise.all([
-      api<{ items: TaskData[] }>(`/my/tasks?dueDate=${selectedDate}&pageSize=50${taskQs}`),
-      api<{ items: TaskData[] }>(`/my/tasks?overdue=true&pageSize=50${taskQs}`),
+      api<{ items: TaskData[] } | null>(`/my/tasks?dueDate=${selectedDate}&pageSize=50${taskQs}`),
+      api<{ items: TaskData[] } | null>(`/my/tasks?overdue=true&pageSize=50${taskQs}`),
     ]);
+    if (!dueData || !overdueData) return;
     setDueTasks(dueData.items);
     setOverdueTasks(overdueData.items.filter((t) => t.dueDate?.slice(0, 10) !== selectedDate));
   }, [selectedDate, taskQs]);
@@ -196,7 +199,8 @@ export default function PlannerView({ workspaceId, workspaceName }: PlannerViewP
   // Load calendar summary — always global
   const loadCalendarSummary = useCallback(async () => {
     const monthStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}`;
-    const data = await api<{ days: CalendarDayData[] }>(`/planner/calendar-summary?month=${monthStr}`);
+    const data = await api<{ days: CalendarDayData[] } | null>(`/planner/calendar-summary?month=${monthStr}`);
+    if (!data) return;
     setCalendarDays(data.days);
   }, [calYear, calMonth]);
 
@@ -333,8 +337,9 @@ export default function PlannerView({ workspaceId, workspaceName }: PlannerViewP
   // Load workspaces for quick-create picker (global planner only)
   useEffect(() => {
     if (user && !workspaceId) {
-      api<{ items: { id: string; name: string }[] }>('/workspaces')
+      api<{ items: { id: string; name: string }[] } | null>('/workspaces')
         .then((d) => {
+          if (!d) return;
           setWorkspaces(d.items);
           if (d.items.length === 1) setQuickWorkspaceId(d.items[0].id);
         })
@@ -420,11 +425,17 @@ export default function PlannerView({ workspaceId, workspaceName }: PlannerViewP
       case 'schedule':
         return (
           <PlannerCard>
-            <div className="flex items-center justify-between">
+            <div
+              className="flex items-center justify-between"
+              data-tour="schedule"
+              data-tour-label="Schedule — today’s real appointments"
+            >
               <CardLabel>Schedule</CardLabel>
               <div className="flex items-center gap-1">
                 <button
                   onClick={() => setShowAIExtract(true)}
+                  data-tour="import-schedule"
+                  data-tour-label="Import schedule from a screenshot — AI extracts events"
                   className="z-btn z-btn-primary z-btn-xs"
                 >
                   import
@@ -472,7 +483,11 @@ export default function PlannerView({ workspaceId, workspaceName }: PlannerViewP
       case 'goals':
         return (
           <PlannerCard>
-            <div className="flex items-center justify-between">
+            <div
+              className="flex items-center justify-between"
+              data-tour="goals"
+              data-tour-label="Today’s Goals — added by you, manually"
+            >
               <CardLabel>Today&apos;s Goals</CardLabel>
               <button
                 onClick={() => { setShowTaskPicker(!showTaskPicker); if (!showTaskPicker) loadAvailableTasks(); }}
@@ -898,12 +913,16 @@ export default function PlannerView({ workspaceId, workspaceName }: PlannerViewP
         <div className="flex items-center justify-end gap-2 mb-3 shrink-0">
           <button
             onClick={() => setShowAIPlanner(true)}
+            data-tour="shape-flow"
+            data-tour-label="Shape flow with AI — drafts a calm schedule"
             className="z-btn z-btn-primary z-btn-sm"
           >
             Shape flow with AI
           </button>
           <button
             onClick={() => setEditingLayout(!editingLayout)}
+            data-tour="edit-layout"
+            data-tour-label="Edit Layout — rearrange Canvas widgets"
             className={`hidden md:inline-flex z-btn z-btn-primary z-btn-sm`}
           >
             {editingLayout ? 'Done' : 'Edit Layout'}

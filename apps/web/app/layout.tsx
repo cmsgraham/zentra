@@ -1,9 +1,25 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import './globals.css';
+import ServiceWorkerRegister from '@/components/pwa/ServiceWorkerRegister';
+import CacheVisitedListPage from '@/components/pwa/CacheVisitedListPage';
+
+const SITE_URL =
+  process.env.NEXT_PUBLIC_SITE_URL || 'https://usezentra.app';
 
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: 'Zentra',
   description: 'Your daily control system',
+  alternates: {
+    canonical: '/',
+  },
+  manifest: '/manifest.webmanifest',
+  applicationName: 'Zentra',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'Zentra',
+  },
   icons: {
     icon: [
       { url: '/zentra_logo_azul.png', media: '(prefers-color-scheme: light)' },
@@ -20,15 +36,22 @@ export const metadata: Metadata = {
   },
 };
 
+export const viewport: Viewport = {
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#191f4a' },
+    { media: '(prefers-color-scheme: dark)', color: '#14151c' },
+  ],
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
+};
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@350;400;450;500;550;600;700&display=swap" rel="stylesheet" />
-      </head>
       <body className="min-h-screen antialiased">
+        <ServiceWorkerRegister />
+        <CacheVisitedListPage />
         {children}
       </body>
     </html>

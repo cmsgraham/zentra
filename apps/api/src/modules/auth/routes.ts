@@ -41,9 +41,13 @@ const refreshSchema = z.object({
 });
 
 const SALT_ROUNDS = 12;
-const ACCESS_TOKEN_TTL = '15m';
-const ACCESS_COOKIE_MAX_AGE = 15 * 60; // 15 minutes in seconds
-const REFRESH_TOKEN_DAYS = 14;
+// Access token: short-lived, auto-renewed via refresh cookie.
+const ACCESS_TOKEN_TTL = '30m';
+const ACCESS_COOKIE_MAX_AGE = 30 * 60; // 30 minutes in seconds
+// Refresh token: 60-day rolling window. Each use rotates and resets expiry,
+// so an active user effectively never has to retype their password on a
+// trusted device. After 60 days of inactivity → re-auth.
+const REFRESH_TOKEN_DAYS = 60;
 const REFRESH_COOKIE_MAX_AGE = REFRESH_TOKEN_DAYS * 24 * 60 * 60;
 
 // Account-lockout tuning
@@ -101,6 +105,49 @@ async function recordLoginFailure(app: FastifyInstance, email: string): Promise<
 
 async function clearLoginFailures(app: FastifyInstance, email: string): Promise<void> {
   await app.redis.del(`auth:fail:${email}`);
+}
+
+// --- Login attempt logging (for admin security dashboard) ---------------
+async function logLoginAttempt(
+  app: FastifyInstance,
+  request: { ip?: string; headers: Record<string, unknown> },
+  args: { email?: string | null; userId?: string | null; success: boolean; provider: 'email' | 'google'; failureReason?: string },
+): Promise<void> {
+  try {
+    const ua = (request.headers['user-agent'] as string | undefined)?.slice(0, 500) ?? null;
+    await app.pg.query(
+      `INSERT INTO login_attempts (email, user_id, success, provider, failure_reason, ip, user_agent)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [args.email ?? null, args.userId ?? null, args.success, args.provider, args.failureReason ?? null, request.ip ?? null, ua],
+    );
+  } catch (err) {
+    app.log.warn({ err: (err as Error).message }, 'failed to log login attempt');
+  }
+}
+
+// --- Promote to admin if email is in ADMIN_EMAILS allowlist -------------
+async function promoteIfAllowlisted(
+  app: FastifyInstance,
+  user: { id: string; email: string },
+): Promise<void> {
+  const env = getEnv();
+  if (!env.ADMIN_EMAILS) return;
+  const allowlist = env.ADMIN_EMAILS.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  if (!allowlist.includes(user.email.toLowerCase())) return;
+  try {
+    await app.pg.query(
+      `UPDATE users SET role = 'admin' WHERE id = $1 AND role <> 'admin'`,
+      [user.id],
+    );
+  } catch (err) {
+    app.log.warn({ err: (err as Error).message }, 'failed to promote admin');
+  }
+}
+
+async function touchLastSeen(app: FastifyInstance, userId: string): Promise<void> {
+  try {
+    await app.pg.query('UPDATE users SET last_seen_at = now() WHERE id = $1', [userId]);
+  } catch { /* non-fatal */ }
 }
 
 // --- Email verification --------------------------------------------------
@@ -194,8 +241,15 @@ async function issueAuthSession(
   reply: FastifyReply,
   user: { id: string; email: string; name: string },
 ): Promise<void> {
+  // Re-fetch role so JWT reflects current admin status (only the auth guard
+  // is the source of truth — this is a hint for the client UI).
+  let role: 'user' | 'admin' = 'user';
+  try {
+    const r = await app.pg.query('SELECT role FROM users WHERE id = $1', [user.id]);
+    if (r.rows[0]?.role === 'admin') role = 'admin';
+  } catch { /* non-fatal */ }
   const accessToken = app.jwt.sign(
-    { sub: user.id, email: user.email, name: user.name },
+    { sub: user.id, email: user.email, name: user.name, role },
     { expiresIn: ACCESS_TOKEN_TTL },
   );
   const refreshToken = crypto.randomBytes(48).toString('hex');
@@ -206,9 +260,20 @@ async function issueAuthSession(
     [user.id, refreshHash, refreshExpires],
   );
   setAuthCookies(reply, accessToken, refreshToken);
+  // Touch last_seen for activity metrics.
+  void touchLastSeen(app, user.id);
 }
 
 export default async function authRoutes(app: FastifyInstance) {
+  // Public config — lets the web UI hide buttons for providers that aren't
+  // configured in this environment (e.g. Google OAuth in dev).
+  app.get('/config', async () => {
+    const env = getEnv();
+    return {
+      googleEnabled: !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
+    };
+  });
+
   // Sign up
   app.post('/signup', {
     config: { rateLimit: { max: 5, timeWindow: '15 minutes' } },
@@ -249,26 +314,38 @@ export default async function authRoutes(app: FastifyInstance) {
     const body = loginSchema.parse(request.body);
 
     if (await isAccountLocked(app, body.email)) {
+      void logLoginAttempt(app, request, { email: body.email, success: false, provider: 'email', failureReason: 'locked' });
       throw new UnauthorizedError('Account temporarily locked due to too many failed attempts. Try again later.');
     }
 
     const result = await app.pg.query(
-      'SELECT id, email, name, password_hash, totp_enabled FROM users WHERE email = $1',
+      'SELECT id, email, name, password_hash, totp_enabled, status FROM users WHERE email = $1',
       [body.email],
     );
     if (result.rows.length === 0) {
       await recordLoginFailure(app, body.email);
+      void logLoginAttempt(app, request, { email: body.email, success: false, provider: 'email', failureReason: 'no_user' });
       throw new UnauthorizedError('Invalid credentials');
     }
 
     const user = result.rows[0];
+    if (user.status === 'suspended') {
+      void logLoginAttempt(app, request, { email: body.email, userId: user.id, success: false, provider: 'email', failureReason: 'suspended' });
+      throw new UnauthorizedError('Account suspended. Contact support.');
+    }
+    if (user.status === 'deleted') {
+      void logLoginAttempt(app, request, { email: body.email, userId: user.id, success: false, provider: 'email', failureReason: 'deleted' });
+      throw new UnauthorizedError('Invalid credentials');
+    }
     // Users created via Google OAuth have no password_hash. Tell them how to log in.
     if (!user.password_hash) {
+      void logLoginAttempt(app, request, { email: body.email, userId: user.id, success: false, provider: 'email', failureReason: 'oauth_only' });
       throw new UnauthorizedError('This account uses Google Sign-In. Use the "Continue with Google" button.');
     }
     const valid = await bcrypt.compare(body.password, user.password_hash);
     if (!valid) {
       await recordLoginFailure(app, body.email);
+      void logLoginAttempt(app, request, { email: body.email, userId: user.id, success: false, provider: 'email', failureReason: 'invalid_password' });
       throw new UnauthorizedError('Invalid credentials');
     }
 
@@ -281,6 +358,8 @@ export default async function authRoutes(app: FastifyInstance) {
       return reply.send({ twofaRequired: true, challenge });
     }
 
+    await promoteIfAllowlisted(app, user);
+    void logLoginAttempt(app, request, { email: body.email, userId: user.id, success: true, provider: 'email' });
     await issueAuthSession(app, reply, user);
     return reply.send({
       user: { id: user.id, email: user.email, name: user.name },
@@ -421,7 +500,7 @@ export default async function authRoutes(app: FastifyInstance) {
               zentra_dnd_start, zentra_dnd_end, zentra_default_session_minutes,
               zentra_start_of_day_time, zentra_end_of_day_time, zentra_ai_opt_in, zentra_plus_until,
               theme, onboarding_completed_at,
-              email_verified_at, totp_enabled, google_sub,
+              email_verified_at, totp_enabled, google_sub, role,
               password_hash IS NOT NULL AS has_password
        FROM users WHERE id = $1`,
       [request.user.sub],
@@ -451,6 +530,7 @@ export default async function authRoutes(app: FastifyInstance) {
       twoFactorEnabled: !!u.totp_enabled,
       googleLinked: !!u.google_sub,
       hasPassword: !!u.has_password,
+      role: u.role || 'user',
     };
   });
 
@@ -508,6 +588,60 @@ export default async function authRoutes(app: FastifyInstance) {
       taskDefaultComplexity: u.task_default_complexity,
       taskDefaultEstimatedMinutes: u.task_default_estimated_minutes,
     };
+  });
+
+  // ---------------------------------------------------------------------
+  // Account deletion — irreversible
+  //
+  // Removes the user row. All user-owned data (workspaces, tasks, lists,
+  // focus_sessions, friendships, refresh_tokens, etc.) cascades via
+  // ON DELETE CASCADE constraints in the schema. Some audit fields
+  // (invited_by, actor_id) are ON DELETE SET NULL by design.
+  //
+  // Password is required for users with a password_hash. Google-only users
+  // may confirm with a literal "DELETE" phrase in the confirmation field.
+  // ---------------------------------------------------------------------
+  const deleteAccountSchema = z.object({
+    password: z.string().optional(),
+    confirmation: z.string().optional(),
+  });
+
+  app.delete('/me', { preHandler: [app.authenticate] }, async (request, reply) => {
+    const body = deleteAccountSchema.parse(request.body ?? {});
+    const userId = request.user.sub;
+
+    const row = await app.pg.query(
+      `SELECT id, email, password_hash FROM users WHERE id = $1`,
+      [userId],
+    );
+    if (row.rows.length === 0) throw new NotFoundError('User not found');
+    const user = row.rows[0];
+
+    if (user.password_hash) {
+      if (!body.password) throw new BadRequestError('Password required to confirm deletion');
+      const ok = await bcrypt.compare(body.password, user.password_hash);
+      if (!ok) throw new UnauthorizedError('Incorrect password');
+    } else {
+      // OAuth-only account — require the literal word DELETE.
+      if ((body.confirmation || '').trim().toUpperCase() !== 'DELETE') {
+        throw new BadRequestError('Type DELETE to confirm');
+      }
+    }
+
+    // Cascades will remove workspaces, tasks, lists, sessions, etc.
+    await app.pg.query('DELETE FROM users WHERE id = $1', [userId]);
+
+    // Clear the session cookies so the client is logged out immediately.
+    const common = {
+      httpOnly: true,
+      secure: isProd(),
+      sameSite: 'lax' as const,
+      path: '/',
+    };
+    reply.clearCookie('zentra_access', common);
+    reply.clearCookie('zentra_refresh', { ...common, path: '/api/auth' });
+
+    return reply.status(200).send({ deleted: true });
   });
 
   // ---------------------------------------------------------------------

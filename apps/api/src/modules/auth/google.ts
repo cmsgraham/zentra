@@ -102,8 +102,8 @@ export default async function googleAuthRoutes(app: FastifyInstance) {
         // Brand-new user. Create with no password_hash.
         const name = (profile.name || email.split('@')[0]).slice(0, 200);
         const inserted = await app.pg.query(
-          `INSERT INTO users (name, email, google_sub, email_verified_at)
-           VALUES ($1, $2, $3, $4)
+          `INSERT INTO users (name, email, google_sub, email_verified_at, auth_provider)
+           VALUES ($1, $2, $3, $4, 'google')
            RETURNING id, email, name`,
           [name, email, profile.sub, emailVerifiedByGoogle ? new Date() : null],
         );
@@ -111,9 +111,45 @@ export default async function googleAuthRoutes(app: FastifyInstance) {
       }
     }
 
+    // Block suspended accounts.
+    const status = (await app.pg.query('SELECT status FROM users WHERE id = $1', [userRow.id])).rows[0]?.status;
+    if (status === 'suspended' || status === 'deleted') {
+      try {
+        await app.pg.query(
+          `INSERT INTO login_attempts (email, user_id, success, provider, failure_reason, ip, user_agent)
+           VALUES ($1, $2, false, 'google', $3, $4, $5)`,
+          [userRow.email, userRow.id, status, request.ip ?? null, (request.headers['user-agent'] as string | undefined)?.slice(0, 500) ?? null],
+        );
+      } catch { /* non-fatal */ }
+      return reply.redirect(`${env.APP_URL}/login?error=suspended`);
+    }
+
+    // Auto-promote to admin if email is in ADMIN_EMAILS allowlist.
+    if (env.ADMIN_EMAILS) {
+      const allowlist = env.ADMIN_EMAILS.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+      if (allowlist.includes(userRow.email.toLowerCase())) {
+        try {
+          await app.pg.query(`UPDATE users SET role = 'admin' WHERE id = $1 AND role <> 'admin'`, [userRow.id]);
+        } catch { /* non-fatal */ }
+      }
+    }
+
+    // Log successful login + touch last_seen.
+    try {
+      await app.pg.query(
+        `INSERT INTO login_attempts (email, user_id, success, provider, ip, user_agent)
+         VALUES ($1, $2, true, 'google', $3, $4)`,
+        [userRow.email, userRow.id, request.ip ?? null, (request.headers['user-agent'] as string | undefined)?.slice(0, 500) ?? null],
+      );
+      await app.pg.query('UPDATE users SET last_seen_at = now() WHERE id = $1', [userRow.id]);
+    } catch { /* non-fatal */ }
+
+    // Re-fetch role for JWT payload.
+    const role = ((await app.pg.query('SELECT role FROM users WHERE id = $1', [userRow.id])).rows[0]?.role === 'admin') ? 'admin' : 'user';
+
     // Issue session (same logic as password login)
     const accessToken = app.jwt.sign(
-      { sub: userRow.id, email: userRow.email, name: userRow.name },
+      { sub: userRow.id, email: userRow.email, name: userRow.name, role },
       { expiresIn: '15m' },
     );
     const refreshToken = crypto.randomBytes(48).toString('hex');

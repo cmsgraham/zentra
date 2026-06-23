@@ -13,9 +13,9 @@ const iconTasks = (
     <rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>
   </svg>
 );
-const iconShopping = (
+const iconBudget = (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/>
+    <rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 9h8M8 13h5"/><path d="M16.5 17.5c1 0 1.5-.5 1.5-1.2 0-.8-.6-1.1-1.5-1.3-.8-.2-1.2-.4-1.2-.9 0-.5.4-.8 1-.8.6 0 1 .2 1.3.6"/>
   </svg>
 );
 const iconMore = (
@@ -34,7 +34,7 @@ export default function MobileBottomNav({ onMorePress }: Props) {
   const items = [
     { key: 'today', label: 'Flow', icon: iconToday, href: '/today', active: pathname === '/today' || pathname === '/reflect' },
     { key: 'tasks', label: 'Studio', icon: iconTasks, href: '/workspaces', active: pathname.startsWith('/workspaces') },
-    { key: 'lists', label: 'Lists', icon: iconShopping, href: '/lists', active: pathname.startsWith('/lists') || pathname.startsWith('/shopping') },
+    { key: 'budget', label: 'Budget', icon: iconBudget, href: '/budget', active: pathname.startsWith('/budget') },
     { key: 'more', label: 'More', icon: iconMore, href: null, active: false },
   ];
 

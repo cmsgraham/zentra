@@ -57,12 +57,12 @@ const navItems = (id: string) => {
         <polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/>
       </svg>
     )},
-    { href: `/workspaces/${id}/import/text`, label: 'Text Import', disabled: false, icon: (
+    { href: `/workspaces/${id}/import/text`, label: 'Text Import', disabled: false, dataTour: 'text-import', dataTourLabel: 'Text Import — paste a list, get intentions', icon: (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
         <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
       </svg>
     )},
-    { href: `/workspaces/${id}/import/image`, label: 'Image Import', disabled: false, icon: (
+    { href: `/workspaces/${id}/import/image`, label: 'Image Import', disabled: false, dataTour: 'image-import', dataTourLabel: 'Image Import — photo → intentions via AI', icon: (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
       </svg>
@@ -76,6 +76,8 @@ export default function WorkspaceSidebar({ workspaceId }: SidebarProps) {
 
   return (
     <aside
+      data-tour="workspace-sidebar"
+      data-tour-label="Sidebar — Board, Waiting, Archive, Imports for this Space"
       className="w-52 shrink-0 p-3 flex flex-col gap-0.5"
       style={{ background: 'var(--ink-bg)', borderRight: '1px solid var(--ink-border-subtle)' }}
     >
@@ -99,6 +101,8 @@ export default function WorkspaceSidebar({ workspaceId }: SidebarProps) {
           <Link
             key={item.href}
             href={item.href}
+            data-tour={(item as { dataTour?: string }).dataTour}
+            data-tour-label={(item as { dataTourLabel?: string }).dataTourLabel}
             className="flex items-center gap-2.5 px-2.5 py-[7px] rounded-md text-[13px] transition-all"
             style={{
               background: active ? 'var(--ink-accent-light)' : 'transparent',

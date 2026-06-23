@@ -9,6 +9,12 @@ interface MemberItem {
   role: string;
 }
 
+interface Friend {
+  id: string;
+  name: string;
+  email: string;
+}
+
 interface Props {
   workspaceId: string;
   onClose: () => void;
@@ -16,19 +22,29 @@ interface Props {
 
 export default function WorkspaceMembersModal({ workspaceId, onClose }: Props) {
   const [members, setMembers] = useState<MemberItem[]>([]);
-  const [email, setEmail] = useState('');
+  const [friends, setFriends] = useState<Friend[]>([]);
+  const [shareUserId, setShareUserId] = useState('');
   const [role, setRole] = useState<'member' | 'admin'>('member');
   const [sending, setSending] = useState(false);
   const [message, setMessage] = useState<{ text: string; error?: boolean } | null>(null);
   const [myRole, setMyRole] = useState<string>('member');
+  const [showEmailInvite, setShowEmailInvite] = useState(false);
+  const [email, setEmail] = useState('');
 
   async function loadMembers() {
     const data = await api<{ items: MemberItem[] }>(`/workspaces/${workspaceId}/members?pageSize=100`);
     setMembers(data.items);
   }
 
+  async function loadFriends() {
+    const data = await api<{ items: Friend[] } | null>('/friends');
+    if (!data) return;
+    setFriends(data.items);
+  }
+
   useEffect(() => {
     loadMembers();
+    loadFriends();
   }, [workspaceId]);
 
   useEffect(() => {
@@ -42,7 +58,30 @@ export default function WorkspaceMembersModal({ workspaceId, onClose }: Props) {
 
   const canInvite = myRole === 'owner' || myRole === 'admin';
 
-  async function handleInvite(e: FormEvent) {
+  /** Share with an existing friend by sending an invite to their stored email. */
+  async function shareWithFriend(e: FormEvent) {
+    e.preventDefault();
+    if (!shareUserId) return;
+    const friend = friends.find((f) => f.id === shareUserId);
+    if (!friend) return;
+    setSending(true);
+    setMessage(null);
+    try {
+      await api(`/workspaces/${workspaceId}/invites`, {
+        method: 'POST',
+        body: { email: friend.email, role },
+      });
+      setMessage({ text: `Invite sent to ${friend.name}` });
+      setShareUserId('');
+      loadMembers();
+    } catch (err: any) {
+      setMessage({ text: err.message || 'Could not send invite', error: true });
+    }
+    setSending(false);
+  }
+
+  /** Fallback: invite someone who isn't a friend yet, by raw email. */
+  async function inviteByEmail(e: FormEvent) {
     e.preventDefault();
     if (!email.trim()) return;
     setSending(true);
@@ -54,6 +93,7 @@ export default function WorkspaceMembersModal({ workspaceId, onClose }: Props) {
       });
       setMessage({ text: `Invite sent to ${email.trim()}` });
       setEmail('');
+      setShowEmailInvite(false);
     } catch (err: any) {
       setMessage({ text: err.message || 'Failed to send invite', error: true });
     }
@@ -72,6 +112,10 @@ export default function WorkspaceMembersModal({ workspaceId, onClose }: Props) {
     return 'var(--ink-text-muted)';
   };
 
+  // Friends not already members
+  const memberUserIds = new Set(members.map((m) => m.user.id));
+  const availableFriends = friends.filter((f) => !memberUserIds.has(f.id));
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center px-4 z-animate-fade"
@@ -89,7 +133,7 @@ export default function WorkspaceMembersModal({ workspaceId, onClose }: Props) {
         {/* Header */}
         <div className="flex items-center justify-between mb-5">
           <div>
-            <h2 className="text-base font-semibold">Space Members</h2>
+            <h2 className="text-base font-semibold">Share space</h2>
             <p className="text-xs mt-0.5" style={{ color: 'var(--ink-text-muted)' }}>
               {members.length} member{members.length !== 1 ? 's' : ''}
             </p>
@@ -105,40 +149,100 @@ export default function WorkspaceMembersModal({ workspaceId, onClose }: Props) {
           </button>
         </div>
 
-        {/* Invite form (owner/admin only) */}
+        {/* Share form (owner/admin only) */}
         {canInvite && (
-          <form onSubmit={handleInvite} className="mb-5">
+          <div className="mb-5">
             <p className="text-[11px] font-medium uppercase tracking-widest mb-2" style={{ color: 'var(--ink-text-muted)' }}>
-              Invite someone
+              Share with a friend
             </p>
-            <div className="flex gap-2">
-              <input
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="Email address"
-                type="email"
-                required
-                className="flex-1 px-3 py-2 rounded-lg text-sm outline-none transition-shadow focus:ring-2"
-                style={{ border: '1px solid var(--ink-border)', background: 'var(--ink-bg)', color: 'var(--ink-text)' }}
-              />
-              <select
-                value={role}
-                onChange={(e) => setRole(e.target.value as 'member' | 'admin')}
-                className="px-2 py-2 rounded-lg text-xs"
-                style={{ border: '1px solid var(--ink-border)', background: 'var(--ink-bg)', color: 'var(--ink-text)' }}
-              >
-                <option value="member">Member</option>
-                <option value="admin">Admin</option>
-              </select>
-              <button
-                type="submit"
-                disabled={sending}
-                className="px-3 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50 transition-colors hover:opacity-90 active:scale-[0.97]"
-                style={{ background: 'var(--ink-accent)' }}
-              >
-                {sending ? '…' : 'Invite'}
-              </button>
-            </div>
+
+            {!showEmailInvite ? (
+              <form onSubmit={shareWithFriend}>
+                <div className="flex gap-2">
+                  <select
+                    value={shareUserId}
+                    onChange={(e) => setShareUserId(e.target.value)}
+                    className="flex-1 px-3 py-2 rounded-lg text-sm"
+                    style={{ border: '1px solid var(--ink-border)', background: 'var(--ink-bg)', color: 'var(--ink-text)' }}
+                  >
+                    <option value="">
+                      {availableFriends.length === 0 ? 'No friends to share with' : 'Select a friend to share with'}
+                    </option>
+                    {availableFriends.map((friend) => (
+                      <option key={friend.id} value={friend.id}>
+                        {friend.name} ({friend.email})
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={role}
+                    onChange={(e) => setRole(e.target.value as 'member' | 'admin')}
+                    className="px-2 py-2 rounded-lg text-xs"
+                    style={{ border: '1px solid var(--ink-border)', background: 'var(--ink-bg)', color: 'var(--ink-text)' }}
+                    aria-label="Role"
+                  >
+                    <option value="member">Member</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                  <button
+                    type="submit"
+                    disabled={!shareUserId || sending}
+                    className="px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50 transition-colors hover:opacity-90 active:scale-[0.97]"
+                    style={{ background: 'var(--ink-accent)' }}
+                  >
+                    {sending ? '…' : 'Share'}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setShowEmailInvite(true); setMessage(null); }}
+                  className="text-xs mt-2 underline-offset-2 hover:underline"
+                  style={{ color: 'var(--ink-text-muted)' }}
+                >
+                  Or invite someone by email
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={inviteByEmail}>
+                <div className="flex gap-2">
+                  <input
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="Email address"
+                    type="email"
+                    required
+                    className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
+                    style={{ border: '1px solid var(--ink-border)', background: 'var(--ink-bg)', color: 'var(--ink-text)' }}
+                  />
+                  <select
+                    value={role}
+                    onChange={(e) => setRole(e.target.value as 'member' | 'admin')}
+                    className="px-2 py-2 rounded-lg text-xs"
+                    style={{ border: '1px solid var(--ink-border)', background: 'var(--ink-bg)', color: 'var(--ink-text)' }}
+                  >
+                    <option value="member">Member</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                  <button
+                    type="submit"
+                    disabled={sending}
+                    className="px-3 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50"
+                    style={{ background: 'var(--ink-accent)' }}
+                  >
+                    {sending ? '…' : 'Invite'}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setShowEmailInvite(false); setMessage(null); }}
+                  className="text-xs mt-2 underline-offset-2 hover:underline"
+                  style={{ color: 'var(--ink-text-muted)' }}
+                >
+                  ← Back to friends
+                </button>
+              </form>
+            )}
+
             {message && (
               <p
                 className="text-xs mt-2 px-2 py-1.5 rounded-lg"
@@ -150,7 +254,7 @@ export default function WorkspaceMembersModal({ workspaceId, onClose }: Props) {
                 {message.text}
               </p>
             )}
-          </form>
+          </div>
         )}
 
         {/* Members list */}

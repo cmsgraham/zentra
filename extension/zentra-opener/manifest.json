@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Zentra Opener",
+  "version": "1.0.0",
+  "description": "Open all product links from a Zentra shopping list in background tabs.",
+  "permissions": ["tabs"],
+  "host_permissions": [
+    "https://usezentra.app/*",
+    "https://www.usezentra.app/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://usezentra.app/*",
+        "https://www.usezentra.app/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

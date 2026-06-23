@@ -47,8 +47,14 @@ export default function WorkspaceBoardPage() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showBulkEdit, setShowBulkEdit] = useState(false);
-  const [addingToTomorrow, setAddingToTomorrow] = useState(false);
-  const [tomorrowToast, setTomorrowToast] = useState<string | null>(null);
+  const [addingToDate, setAddingToDate] = useState(false);
+  const [dateToast, setDateToast] = useState<string | null>(null);
+  // Default the picker to today (user's local calendar). Most adds target
+  // today's plan; users can still pick tomorrow or any other date.
+  const [targetDate, setTargetDate] = useState<string>(() => {
+    return new Date().toLocaleDateString('en-CA');
+  });
+  const [showDatePicker, setShowDatePicker] = useState(false);
 
   // Search / filter state
   const [search, setSearch] = useState('');
@@ -71,19 +77,16 @@ export default function WorkspaceBoardPage() {
   }, []);
 
   /**
-   * Take the currently-selected tasks and add them as goals on tomorrow's plan.
-   * Mirrors the add-task-as-goal flow in PlannerView: ensure a plan exists for
-   * the date via PUT /planner, then POST each task to /planner/:id/goals with
-   * a `linkedTaskId` so the planner UI can render them as linked intentions.
+   * Take the currently-selected tasks and add them as goals on the user-chosen
+   * date's plan. Mirrors the add-task-as-goal flow in PlannerView: ensure a
+   * plan exists for the date via PUT /planner, then POST each task to
+   * /planner/:id/goals with a `linkedTaskId` so the planner UI can render them
+   * as linked intentions.
    */
-  const addSelectedToTomorrow = useCallback(async () => {
-    if (selectedIds.size === 0 || addingToTomorrow) return;
+  const addSelectedToDate = useCallback(async (date: string) => {
+    if (selectedIds.size === 0 || addingToDate || !date) return;
     const ids = Array.from(selectedIds);
-    // Tomorrow in the user's local calendar (YYYY-MM-DD).
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const date = tomorrow.toLocaleDateString('en-CA');
-    setAddingToTomorrow(true);
+    setAddingToDate(true);
     try {
       const planRes = await api<{ plan: { id: string } }>('/planner', {
         method: 'PUT',
@@ -113,8 +116,8 @@ export default function WorkspaceBoardPage() {
             title: task.title,
             linkedTaskId: task.id,
             sortOrder: sortOrder++,
-            // Keep tasks as Open when planning tomorrow — they shouldn't
-            // flip to Present (in_progress) until the user actually starts.
+            // Keep tasks as Open — they shouldn't flip to Present
+            // (in_progress) until the user actually starts.
             skipAutoStart: true,
           },
         });
@@ -122,27 +125,28 @@ export default function WorkspaceBoardPage() {
       }
       const skipped = ids.length - added;
       const msg = added === 0
-        ? 'Already on tomorrow'
+        ? `Already on ${date}`
         : skipped > 0
-          ? `Added ${added} to tomorrow · ${skipped} already there`
-          : `Added ${added} to tomorrow`;
-      setTomorrowToast(msg);
-      setTimeout(() => setTomorrowToast(null), 2500);
+          ? `Added ${added} to ${date} · ${skipped} already there`
+          : `Added ${added} to ${date}`;
+      setDateToast(msg);
+      setTimeout(() => setDateToast(null), 2500);
+      setShowDatePicker(false);
       exitSelection();
     } catch {
-      setTomorrowToast("Couldn't add to tomorrow");
-      setTimeout(() => setTomorrowToast(null), 2500);
+      setDateToast("Couldn't add to that date");
+      setTimeout(() => setDateToast(null), 2500);
     } finally {
-      setAddingToTomorrow(false);
+      setAddingToDate(false);
     }
-  }, [selectedIds, addingToTomorrow, tasks, exitSelection]);
+  }, [selectedIds, addingToDate, tasks, exitSelection]);
 
   // Blocked-reason prompt state
   const [pendingDrop, setPendingDrop] = useState<{ taskIds: string[]; status: string } | null>(null);
   const [blockedReason, setBlockedReason] = useState('');
 
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(PointerSensor, { activationConstraint: { distance: 3 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
   );
 
@@ -167,7 +171,7 @@ export default function WorkspaceBoardPage() {
     loadWorkspaces();
   }, [loadTasks, loadMembers, loadWorkspaces]);
 
-  const tasksByStatus = (status: string) => tasks.filter((t) => t.status === status);
+  const tasksByStatus = (status: string) => sortByLane(tasks.filter((t) => t.status === status));
 
   // Apply search + filters before grouping by status
   const filteredTasks = tasks.filter((t) => {
@@ -183,7 +187,7 @@ export default function WorkspaceBoardPage() {
     }
     return true;
   });
-  const filteredByStatus = (status: string) => filteredTasks.filter((t) => t.status === status);
+  const filteredByStatus = (status: string) => sortByLane(filteredTasks.filter((t) => t.status === status));
   const hasActiveFilters = !!(search.trim() || priorityFilter || assigneeFilter);
 
   // While actively dragging a multi-selected card, dim its siblings (not the
@@ -206,9 +210,9 @@ export default function WorkspaceBoardPage() {
     }
   }
 
-  async function moveTask(taskId: string, newStatus: string, extra?: Record<string, string>) {
+  async function moveTask(taskId: string, newStatus: string, extra?: Record<string, unknown>) {
     // Optimistic update
-    setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, status: newStatus, ...extra } : t)));
+    setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, status: newStatus, ...(extra as Partial<TaskData>) } : t)));
     try {
       await api(`/tasks/${taskId}`, { method: 'PATCH', body: { status: newStatus, ...extra } });
     } catch {
@@ -217,13 +221,13 @@ export default function WorkspaceBoardPage() {
     }
   }
 
-  async function moveTasksBulk(taskIds: string[], newStatus: string, extra?: Record<string, string>) {
+  async function moveTasksBulk(taskIds: string[], newStatus: string, extra?: Record<string, unknown>) {
     if (taskIds.length === 0) return;
     if (taskIds.length === 1) return moveTask(taskIds[0], newStatus, extra);
 
     const idSet = new Set(taskIds);
     // Optimistic update across the selection
-    setTasks((prev) => prev.map((t) => (idSet.has(t.id) ? { ...t, status: newStatus, ...extra } : t)));
+    setTasks((prev) => prev.map((t) => (idSet.has(t.id) ? { ...t, status: newStatus, ...(extra as Partial<TaskData>) } : t)));
     try {
       await api('/tasks/bulk', {
         method: 'PATCH',
@@ -240,32 +244,155 @@ export default function WorkspaceBoardPage() {
     if (!over) return;
 
     const draggedId = active.id as string;
-    const newStatus = over.id as string;
+    const overId = String(over.id);
     const dragged = tasks.find((t) => t.id === draggedId);
     if (!dragged) return;
 
-    // If the dragged task is part of a multi-selection, move the whole set.
-    // Otherwise just move the single task.
-    const dragIds = selectionMode && selectedIds.has(draggedId)
-      ? Array.from(selectedIds)
-      : [draggedId];
+    // If hovering over another task card, target = that task's lane.
+    // Otherwise target = a lane droppable (id === status string).
+    const overTask = overId !== draggedId ? tasks.find((t) => t.id === overId) : null;
+    const newStatus = overTask ? overTask.status : overId;
+    const isStatusTarget = !overTask && lanes.some((l) => l.status === newStatus);
+    if (!overTask && !isStatusTarget) return;
 
-    // Filter out tasks already in the target status (no-op) but allow the
-    // multi-drop even if `dragged` itself is already there and others aren't.
-    const idsToMove = dragIds.filter((id) => {
-      const t = tasks.find((x) => x.id === id);
-      return t && t.status !== newStatus;
-    });
-    if (idsToMove.length === 0) return;
+    const isMulti = selectionMode && selectedIds.has(draggedId) && selectedIds.size > 1;
 
-    if (newStatus === 'blocked') {
-      setPendingDrop({ taskIds: idsToMove, status: newStatus });
+    // ── Multi-drag: keep existing bulk-status behaviour, no reorder. ──
+    if (isMulti) {
+      const dragIds = Array.from(selectedIds);
+      const idsToMove = dragIds.filter((id) => {
+        const t = tasks.find((x) => x.id === id);
+        return t && t.status !== newStatus;
+      });
+      if (idsToMove.length === 0) return;
+      if (newStatus === 'blocked') {
+        setPendingDrop({ taskIds: idsToMove, status: newStatus });
+        setBlockedReason('');
+        return;
+      }
+      moveTasksBulk(idsToMove, newStatus);
+      exitSelection();
+      return;
+    }
+
+    // ── Single-task drag: support intra-lane reorder + cross-lane drop with position. ──
+    const statusChanged = dragged.status !== newStatus;
+
+    // Build the new lane ordering (target status), then renormalize lane_order
+    // for every card so the persisted order matches the visual indicator
+    // — even when neighbours had null lane_order initially.
+    const reorderedIds = computeReorderedLane(dragged, newStatus, overTask?.id);
+    if (!reorderedIds) return; // no-op
+
+    if (statusChanged && newStatus === 'blocked') {
+      setPendingDrop({ taskIds: [draggedId], status: newStatus });
       setBlockedReason('');
       return;
     }
 
-    moveTasksBulk(idsToMove, newStatus);
-    if (selectionMode && idsToMove.length > 1) exitSelection();
+    reorderLane(draggedId, newStatus, reorderedIds);
+  }
+
+  /**
+   * Persist a lane reorder. Optimistically updates state, then PATCHes the
+   * dragged task (status + new lane_order) plus any siblings whose lane_order
+   * needs to change to keep the lane stable across reloads.
+   */
+  async function reorderLane(
+    draggedId: string,
+    newStatus: string,
+    reorderedIds: string[],
+  ) {
+    const SPACING = 1024;
+    const updates = reorderedIds.map((id, idx) => ({ id, laneOrder: (idx + 1) * SPACING }));
+
+    // Optimistic: apply new lane_order + status to dragged + siblings.
+    setTasks((prev) =>
+      prev.map((t) => {
+        const u = updates.find((x) => x.id === t.id);
+        if (!u) return t;
+        return {
+          ...t,
+          laneOrder: u.laneOrder,
+          status: t.id === draggedId ? newStatus : t.status,
+        };
+      }),
+    );
+
+    try {
+      // Dragged: status + lane_order.
+      await api(`/tasks/${draggedId}`, {
+        method: 'PATCH',
+        body: { status: newStatus, laneOrder: updates.find((u) => u.id === draggedId)!.laneOrder },
+      });
+      // Siblings: lane_order only.
+      await Promise.all(
+        updates
+          .filter((u) => u.id !== draggedId)
+          .map((u) =>
+            api(`/tasks/${u.id}`, { method: 'PATCH', body: { laneOrder: u.laneOrder } }),
+          ),
+      );
+    } catch {
+      await loadTasks();
+    }
+  }
+
+  /**
+   * Sort tasks by lane_order ascending (matches the API's `ORDER BY lane_order
+   * NULLS LAST, created_at DESC` so nulls/unset tasks fall to the bottom).
+   */
+  function sortByLane(list: TaskData[]): TaskData[] {
+    return [...list].sort((a, b) => {
+      const aHas = a.laneOrder !== null && a.laneOrder !== undefined;
+      const bHas = b.laneOrder !== null && b.laneOrder !== undefined;
+      if (aHas && bHas) return (a.laneOrder as number) - (b.laneOrder as number);
+      if (aHas) return -1;
+      if (bHas) return 1;
+      return 0;
+    });
+  }
+
+  /**
+   * Compute the new sequence of task ids in the target lane after `dragged`
+   * is dropped relative to `overTaskId`. Returns null when the drop is a
+   * no-op (same lane, identical position).
+   */
+  function computeReorderedLane(
+    dragged: TaskData,
+    newStatus: string,
+    overTaskId: string | undefined,
+  ): string[] | null {
+    const targetLane = sortByLane(
+      tasks.filter((t) => t.status === newStatus && t.id !== dragged.id),
+    );
+    let insertAt = targetLane.length;
+    if (overTaskId) {
+      const idx = targetLane.findIndex((t) => t.id === overTaskId);
+      if (idx >= 0) {
+        // When dragging downward inside the same lane, insert AFTER the
+        // over-card (matches the visual drop indicator below the card).
+        const draggedIdx = sortByLane(
+          tasks.filter((t) => t.status === newStatus),
+        ).findIndex((t) => t.id === dragged.id);
+        const sameLane = dragged.status === newStatus && draggedIdx >= 0;
+        const dropAfter = sameLane && draggedIdx < idx;
+        insertAt = dropAfter ? idx + 1 : idx;
+      }
+    }
+    const reordered = [
+      ...targetLane.slice(0, insertAt).map((t) => t.id),
+      dragged.id,
+      ...targetLane.slice(insertAt).map((t) => t.id),
+    ];
+    // No-op detection: same lane, same final order.
+    if (dragged.status === newStatus) {
+      const original = sortByLane(tasks.filter((t) => t.status === newStatus)).map((t) => t.id);
+      if (original.length === reordered.length && original.every((id, i) => id === reordered[i])) {
+        return null;
+      }
+    }
+    return reordered;
   }
 
   function handleBlockedConfirm() {
@@ -336,22 +463,57 @@ export default function WorkspaceBoardPage() {
                 </button>
               )}
               {selectionMode && selectedIds.size > 0 && (
-                <button
-                  onClick={addSelectedToTomorrow}
-                  disabled={addingToTomorrow}
-                  className="z-btn"
-                  title="Add selected intentions as goals on tomorrow's plan"
-                >
-                  {addingToTomorrow ? 'Adding…' : `→ Tomorrow's goals (${selectedIds.size})`}
-                </button>
+                <div style={{ position: 'relative', display: 'inline-block' }}>
+                  <button
+                    onClick={() => setShowDatePicker((v) => !v)}
+                    disabled={addingToDate}
+                    className="z-btn"
+                    title="Add selected intentions as goals on a chosen date's plan"
+                  >
+                    {addingToDate ? 'Adding…' : `→ Add to date (${selectedIds.size})`}
+                  </button>
+                  {showDatePicker && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: 'calc(100% + 6px)',
+                        right: 0,
+                        zIndex: 30,
+                        background: 'var(--ink-bg-elev)',
+                        border: '1px solid var(--ink-border)',
+                        borderRadius: 8,
+                        padding: 8,
+                        display: 'flex',
+                        gap: 6,
+                        alignItems: 'center',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                      }}
+                    >
+                      <input
+                        type="date"
+                        value={targetDate}
+                        onChange={(e) => setTargetDate(e.target.value)}
+                        className="z-input"
+                        style={{ fontSize: 13 }}
+                      />
+                      <button
+                        onClick={() => addSelectedToDate(targetDate)}
+                        disabled={addingToDate || !targetDate}
+                        className="z-btn z-btn-primary"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  )}
+                </div>
               )}
-              {tomorrowToast && (
+              {dateToast && (
                 <span
                   className="text-xs"
                   style={{ color: 'var(--ink-text-muted)', paddingLeft: 4 }}
                   role="status"
                 >
-                  {tomorrowToast}
+                  {dateToast}
                 </span>
               )}
               <button
@@ -365,6 +527,8 @@ export default function WorkspaceBoardPage() {
               </button>
               <button
                 onClick={() => setShowMembers(true)}
+                data-tour="share"
+                data-tour-label="Share — invite collaborators to this Space"
                 className="z-btn"
                 title="Members"
               >
@@ -373,6 +537,8 @@ export default function WorkspaceBoardPage() {
               </button>
               <button
                 onClick={() => setShowCreate(true)}
+                data-tour="new-intention-button"
+                data-tour-label="New Intention — full create form"
                 className="z-btn z-btn-primary"
               >
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round"><line x1="7" y1="2" x2="7" y2="12"/><line x1="2" y1="7" x2="12" y2="7"/></svg>
@@ -437,9 +603,13 @@ export default function WorkspaceBoardPage() {
           )}
           {isMobile ? (
             /* Mobile: vertical stacked lanes */
-            <div className="flex-1 overflow-y-auto px-4 pb-24 pt-3">
+            <div
+              className="flex-1 overflow-y-auto px-4 pb-24 pt-3"
+              data-tour="workspace-board"
+              data-tour-label="Board — your intentions for this Space"
+            >
               <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-                <div className="space-y-5">
+                <div className="space-y-5" data-tour="board-states" data-tour-label="States — Open, Present, Waiting on…, I did it!">
                   {lanes.map((lane) => {
                     const laneTasks = filteredByStatus(lane.status);
                     const isCollapsed = collapsedLanes[lane.status] ?? false;
@@ -477,6 +647,7 @@ export default function WorkspaceBoardPage() {
                             selectedIds={selectionMode ? selectedIds : undefined}
                             dimmedIds={dimmedIds}
                             mobile
+                            resizeStorageKey={`zentra:lane-h:${workspaceId}:${lane.status}`}
                           />
                         )}
                       </div>
@@ -507,9 +678,17 @@ export default function WorkspaceBoardPage() {
             </div>
           ) : (
             /* Desktop: horizontal lanes */
-            <div className="flex-1 overflow-x-auto px-5 pb-5">
+            <div
+              className="flex-1 overflow-x-auto px-5 pb-5"
+              data-tour="workspace-board"
+              data-tour-label="Board — your intentions for this Space"
+            >
               <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-                <div className="flex gap-5 h-full">
+                <div
+                  className="flex gap-5 h-full"
+                  data-tour="board-states"
+                  data-tour-label="States — Open, Present, Waiting on…, I did it!"
+                >
                   {lanes.map((lane) => (
                     <BoardLane
                       key={lane.status}

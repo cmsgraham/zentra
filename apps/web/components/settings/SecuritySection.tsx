@@ -1,8 +1,17 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useState, useEffect, type FormEvent } from 'react';
 import { api, ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
+import {
+  passkeysSupported,
+  platformBiometricAvailable,
+  registerPasskey,
+  listPasskeys,
+  deletePasskey,
+  renamePasskey,
+  type Passkey,
+} from '@/lib/passkeys';
 
 /**
  * Security section for the Settings page:
@@ -20,6 +29,7 @@ export default function SecuritySection() {
       <div className="space-y-6">
         <EmailVerifyBlock verified={!!user.emailVerified} />
         <PasswordBlock hasPassword={user.hasPassword !== false} onChanged={refreshUser} />
+        <PasskeysBlock />
         <TwofaBlock enabled={!!user.twoFactorEnabled} onChanged={refreshUser} />
         <ConnectedAccountsBlock googleLinked={!!user.googleLinked} email={user.email} />
       </div>
@@ -361,6 +371,138 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
     <div className="flex items-center justify-between gap-3">
       <span className="text-sm" style={{ color: 'var(--ink-text)' }}>{label}</span>
       <span className="text-sm">{value}</span>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Passkeys (Face ID / Touch ID / Windows Hello / hardware keys)       */
+/* ------------------------------------------------------------------ */
+function PasskeysBlock() {
+  const [supported, setSupported] = useState(false);
+  const [platform, setPlatform] = useState(false);
+  const [keys, setKeys] = useState<Passkey[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [nickname, setNickname] = useState('This device');
+
+  useEffect(() => {
+    setSupported(passkeysSupported());
+    if (!passkeysSupported()) { setLoading(false); return; }
+    (async () => {
+      setPlatform(await platformBiometricAvailable());
+      try {
+        setKeys(await listPasskeys());
+      } catch {
+        /* ignore */
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  async function add() {
+    setError(''); setBusy(true);
+    try {
+      await registerPasskey(nickname.trim() || 'Passkey');
+      setKeys(await listPasskeys());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not add passkey');
+    } finally { setBusy(false); }
+  }
+
+  async function remove(id: string) {
+    if (!confirm('Remove this passkey? You will need to use your password to sign in on this device.')) return;
+    setBusy(true);
+    try {
+      await deletePasskey(id);
+      setKeys((k) => k.filter((p) => p.id !== id));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not remove passkey');
+    } finally { setBusy(false); }
+  }
+
+  async function rename(id: string, currentName: string) {
+    const next = prompt('Rename passkey', currentName);
+    if (!next || next.trim() === currentName) return;
+    try {
+      await renamePasskey(id, next.trim());
+      setKeys((k) => k.map((p) => (p.id === id ? { ...p, nickname: next.trim() } : p)));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not rename');
+    }
+  }
+
+  if (!supported) {
+    return (
+      <Row
+        label="Passkeys"
+        value={
+          <span className="text-xs" style={{ color: 'var(--ink-text-muted)' }}>
+            Not supported on this browser
+          </span>
+        }
+      />
+    );
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-3 mb-2">
+        <div>
+          <div className="text-sm" style={{ color: 'var(--ink-text)' }}>Passkeys</div>
+          <div className="text-xs" style={{ color: 'var(--ink-text-muted)' }}>
+            {platform
+              ? 'Sign in with Face ID, Touch ID, or Windows Hello — no password needed.'
+              : 'Sign in with a hardware key or your phone.'}
+          </div>
+        </div>
+      </div>
+
+      {loading ? (
+        <p className="text-xs" style={{ color: 'var(--ink-text-muted)' }}>Loading…</p>
+      ) : keys.length === 0 ? (
+        <p className="text-xs" style={{ color: 'var(--ink-text-muted)' }}>No passkeys yet.</p>
+      ) : (
+        <ul className="divide-y" style={{ borderColor: 'var(--ink-border-subtle)' }}>
+          {keys.map((k) => (
+            <li key={k.id} className="py-2 flex items-center justify-between gap-3 text-sm">
+              <div className="min-w-0">
+                <div className="truncate" style={{ color: 'var(--ink-text)' }}>{k.nickname}</div>
+                <div className="text-xs" style={{ color: 'var(--ink-text-muted)' }}>
+                  {k.deviceType === 'platform' ? 'This device biometrics' : 'Roaming key'}
+                  {k.lastUsedAt ? ` · last used ${new Date(k.lastUsedAt).toLocaleDateString()}` : ' · never used'}
+                </div>
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                <button type="button" onClick={() => rename(k.id, k.nickname)} className="text-xs underline" style={{ color: 'var(--ink-text-muted)' }}>Rename</button>
+                <button type="button" onClick={() => remove(k.id)} className="text-xs underline" style={{ color: 'var(--ink-blocked)' }}>Remove</button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-3 flex flex-wrap gap-2 items-center">
+        <input
+          type="text"
+          value={nickname}
+          onChange={(e) => setNickname(e.target.value)}
+          maxLength={80}
+          className="z-input text-sm flex-1 min-w-[140px]"
+          placeholder="Device name"
+        />
+        <button
+          type="button"
+          onClick={add}
+          disabled={busy}
+          className="z-btn z-btn-primary text-xs px-3 py-1.5"
+        >
+          {busy ? 'Working…' : 'Add a passkey'}
+        </button>
+      </div>
+      {error && <p className="text-xs mt-2" style={{ color: 'var(--ink-blocked)' }}>{error}</p>}
     </div>
   );
 }

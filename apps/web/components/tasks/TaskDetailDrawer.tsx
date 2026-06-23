@@ -103,12 +103,37 @@ export default function TaskDetailDrawer({ taskId, workspaceId, onClose, onUpdat
   const [splitRecurrence, setSplitRecurrence] = useState('');
   const [splitRecurrenceInterval, setSplitRecurrenceInterval] = useState('1');
   const [splitEqualDates, setSplitEqualDates] = useState<string[]>([]);
+  const [echoOpen, setEchoOpen] = useState(false);
+  const [echoDueAt, setEchoDueAt] = useState('');
+  const [echoCreating, setEchoCreating] = useState(false);
+  const [echoCreated, setEchoCreated] = useState(false);
 
   useEffect(() => {
     loadTask();
     loadComments();
     loadActivity();
   }, [taskId]);
+
+  // Close on Escape. Preserves scroll (no navigation), restores focus to the
+  // element that opened the drawer (typically the task card).
+  useEffect(() => {
+    const previouslyFocused = (typeof document !== 'undefined' ? document.activeElement : null) as HTMLElement | null;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+      }
+    }
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      // Restore focus so keyboard users return to the board without jumping.
+      if (previouslyFocused && typeof previouslyFocused.focus === 'function') {
+        try { previouslyFocused.focus({ preventScroll: true }); } catch {}
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function loadTask() {
     const t = await api<TaskDetail>(`/tasks/${taskId}`);
@@ -271,6 +296,11 @@ export default function TaskDetailDrawer({ taskId, workspaceId, onClose, onUpdat
   }
 
   async function handleUpdateSegmentDate(segId: string, dueDate: string) {
+    // Optimistic update so the controlled <input type="date"> reflects the
+    // new value immediately. Without this, the input briefly snaps back to
+    // the old value while loadTask() is in flight, making it look like the
+    // first pick was ignored.
+    setSegments(prev => prev.map(s => s.id === segId ? { ...s, dueDate: dueDate || null } : s));
     await api(`/task-segments/${segId}`, { method: 'PATCH', body: { dueDate: dueDate || null } });
     await loadTask();
   }
@@ -280,6 +310,24 @@ export default function TaskDetailDrawer({ taskId, workspaceId, onClose, onUpdat
     await api(`/tasks/${taskId}/segments`, { method: 'DELETE' });
     await loadTask();
     onUpdated?.();
+  }
+
+  async function handleCreateEcho() {
+    if (!task) return;
+    setEchoCreating(true);
+    try {
+      await api('/reminders', {
+        method: 'POST',
+        body: {
+          title: task.title,
+          dueAt: echoDueAt ? new Date(echoDueAt).toISOString() : undefined,
+        },
+      });
+      setEchoCreated(true);
+      setEchoDueAt('');
+      setTimeout(() => { setEchoCreated(false); setEchoOpen(false); }, 1200);
+    } catch { /* ignore */ }
+    setEchoCreating(false);
   }
 
   if (!task) return (
@@ -439,6 +487,20 @@ export default function TaskDetailDrawer({ taskId, workspaceId, onClose, onUpdat
                     Split
                   </button>
                 )}
+                <button
+                  onClick={() => setEchoOpen(true)}
+                  className="z-btn z-btn-ghost z-btn-sm"
+                  title="Create echo from intention"
+                  style={{ color: 'var(--ink-text-muted)' }}
+                >
+                  <span className="inline-flex items-center gap-1">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="8" cy="8" r="2.5" />
+                      <path d="M3 8a5 5 0 0 1 10 0M1 8a7 7 0 0 1 14 0" />
+                    </svg>
+                    Echo
+                  </span>
+                </button>
                 <button onClick={handleDelete} className="z-btn z-btn-ghost z-btn-sm ml-auto" style={{ color: 'var(--ink-blocked)' }}>Delete</button>
               </div>
               {workspaces.length > 1 && (
@@ -633,6 +695,51 @@ export default function TaskDetailDrawer({ taskId, workspaceId, onClose, onUpdat
           )}
         </div>
       </div>
+      {echoOpen && task && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+          style={{ background: 'var(--ink-overlay)' }}
+          onClick={() => !echoCreating && setEchoOpen(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-xl p-5"
+            style={{ background: 'var(--ink-surface)', boxShadow: 'var(--ink-shadow-lg)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold" style={{ color: 'var(--ink-text)' }}>Create echo from intention</h3>
+              <button onClick={() => !echoCreating && setEchoOpen(false)} className="z-btn-icon" style={{ color: 'var(--ink-text-faint)' }}>
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>
+              </button>
+            </div>
+            <p className="text-xs mb-3" style={{ color: 'var(--ink-text-muted)' }}>Title</p>
+            <p className="text-sm mb-4 px-3 py-2 rounded-md" style={{ background: 'var(--ink-surface-alt, var(--ink-bg))', color: 'var(--ink-text)', border: '1px solid var(--ink-border-subtle)' }}>{task.title}</p>
+            <label className="block text-xs mb-1" style={{ color: 'var(--ink-text-muted)' }}>When (optional)</label>
+            <input
+              type="datetime-local"
+              value={echoDueAt}
+              onChange={(e) => setEchoDueAt(e.target.value)}
+              className="z-input mb-4"
+            />
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setEchoOpen(false)}
+                disabled={echoCreating}
+                className="z-btn z-btn-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateEcho}
+                disabled={echoCreating}
+                className="z-btn z-btn-primary z-btn-sm"
+              >
+                {echoCreated ? 'Created ✓' : echoCreating ? 'Creating…' : 'Create echo'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

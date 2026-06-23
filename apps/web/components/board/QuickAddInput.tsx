@@ -24,32 +24,44 @@ function QuickAddInputInner({ onSubmit, placeholder = '+ Add intention…' }: Pr
   const busyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
+  const submit = () => {
+    if (busyRef.current) return;
+    const el = inputRef.current;
+    if (!el) return;
+    const trimmed = el.value.trim();
+    if (!trimmed) return;
+    // Clear directly in the DOM — no React state, no re-render.
+    el.value = '';
+    busyRef.current = true;
+    if (error) setError(null);
+    void onSubmit(trimmed)
+      .catch((err: unknown) => {
+        // Restore the draft into the DOM so the user doesn't lose it.
+        if (inputRef.current) inputRef.current.value = trimmed;
+        setError(err instanceof Error ? err.message : 'Failed to add');
+      })
+      .finally(() => {
+        busyRef.current = false;
+      });
+  };
+
+  // The <form> wrapper is required for the on-screen "Go/Return" key on
+  // mobile browsers (iOS Safari especially) to fire a submit. Bare inputs
+  // listening only for keydown Enter don't reliably get the event from
+  // virtual keyboards, which was causing "nothing happens on enter" on
+  // mobile prod.
   return (
-    <div>
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        submit();
+      }}
+    >
       <input
         ref={inputRef}
         defaultValue=""
-        onKeyDown={(e) => {
-          if (e.key !== 'Enter' || busyRef.current) return;
-          const el = inputRef.current;
-          if (!el) return;
-          const trimmed = el.value.trim();
-          if (!trimmed) return;
-          e.preventDefault();
-          // Clear directly in the DOM — no React state, no re-render.
-          el.value = '';
-          busyRef.current = true;
-          if (error) setError(null);
-          void onSubmit(trimmed)
-            .catch((err: unknown) => {
-              // Restore the draft into the DOM so the user doesn't lose it.
-              if (inputRef.current) inputRef.current.value = trimmed;
-              setError(err instanceof Error ? err.message : 'Failed to add');
-            })
-            .finally(() => {
-              busyRef.current = false;
-            });
-        }}
+        type="text"
+        enterKeyHint="done"
         placeholder={placeholder}
         className="w-full text-xs bg-transparent outline-none px-2.5 py-2 rounded-lg"
         style={{ color: 'var(--ink-text)', border: '1px dashed var(--ink-border-subtle)' }}
@@ -61,7 +73,7 @@ function QuickAddInputInner({ onSubmit, placeholder = '+ Add intention…' }: Pr
           {error}
         </div>
       )}
-    </div>
+    </form>
   );
 }
 

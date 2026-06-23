@@ -1,3 +1,8 @@
+# Redirect www → apex so Google sees a single canonical host.
+www.usezentra.app {
+    redir https://usezentra.app{uri} permanent
+}
+
 usezentra.app {
     # Security headers
     header {
@@ -13,6 +18,12 @@ usezentra.app {
     handle_path /api/* {
         reverse_proxy api:4000
     }
+    # Service worker must NEVER be cached by the browser HTTP cache. The SW
+    # spec already special-cases /sw.js for byte-comparison on update, but
+    # iOS Safari (especially in standalone PWA mode) can hold a stale copy
+    # for hours. Explicit no-store guarantees every page load re-fetches.
+    @sw path /sw.js
+    header @sw Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
     # Note: do not redirect "/" here. Google Search Console / OAuth verifiers
     # require the home page URL to return 200 with a visible Privacy Policy
     # link. The Next.js root page (apps/web/app/page.tsx) renders the link

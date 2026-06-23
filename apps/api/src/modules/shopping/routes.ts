@@ -7,13 +7,23 @@ const paginationSchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(50),
 });
 
+const ALLOWED_FIELDS = ['quantity', 'price', 'vendor', 'category', 'notes', 'url', 'custom'] as const;
+const enabledFieldsSchema = z
+  .array(z.enum(ALLOWED_FIELDS))
+  .max(ALLOWED_FIELDS.length)
+  .optional();
+
 const createListSchema = z.object({
   title: z.string().min(1).max(200),
+  enabledFields: enabledFieldsSchema,
+  customFieldLabel: z.string().max(50).nullable().optional(),
 });
 
 const updateListSchema = z.object({
   title: z.string().min(1).max(200).optional(),
   archived: z.boolean().optional(),
+  enabledFields: enabledFieldsSchema,
+  customFieldLabel: z.string().max(50).nullable().optional(),
 });
 
 const shareListSchema = z.object({
@@ -21,14 +31,36 @@ const shareListSchema = z.object({
   role: z.enum(['owner', 'editor']).default('editor'),
 });
 
+// Restrict product URLs to http(s) so the link is safe to render as an
+// anchor target without exposing javascript: or data: URI XSS vectors.
+const urlSchema = z
+  .string()
+  .trim()
+  .max(2000)
+  .url()
+  .refine((v) => /^https?:\/\//i.test(v), 'URL must start with http:// or https://');
+
 const createItemSchema = z.object({
   displayName: z.string().min(1).max(500),
   quantity: z.number().positive().optional(),
+  price: z.number().nonnegative().nullable().optional(),
+  vendor: z.string().max(200).nullable().optional(),
+  category: z.string().max(50).nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  url: urlSchema.nullable().optional(),
+  customValue: z.string().max(500).nullable().optional(),
+  isSection: z.boolean().optional(),
 });
 
 const updateItemSchema = z.object({
   displayName: z.string().min(1).max(500).optional(),
   quantity: z.number().positive().nullable().optional(),
+  price: z.number().nonnegative().nullable().optional(),
+  vendor: z.string().max(200).nullable().optional(),
+  category: z.string().max(50).nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  url: urlSchema.nullable().optional(),
+  customValue: z.string().max(500).nullable().optional(),
 });
 
 const reorderSchema = z.object({
@@ -37,6 +69,31 @@ const reorderSchema = z.object({
 
 function normalizeItemName(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+// Recompute each unchecked item's section (store) membership from its position
+// in sort_order, so the grouping is explicit and survives check/uncheck and
+// reorder. Checked items keep whatever section they had when last positioned —
+// that's what lets an unchecked item return to its original store. Accepts any
+// object exposing pg-style `query` (the pool or a transaction client).
+async function assignSectionIds(
+  db: { query: (text: string, values?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }> },
+  listId: string,
+): Promise<void> {
+  const { rows } = await db.query(
+    'SELECT id, is_section, checked FROM shopping_list_items WHERE list_id = $1 ORDER BY sort_order ASC, created_at ASC',
+    [listId],
+  );
+  let currentSection: string | null = null;
+  for (const r of rows) {
+    if (r.is_section) {
+      currentSection = r.id as string;
+      continue;
+    }
+    // Preserve checked items' section so they pop back into the right store.
+    if (r.checked) continue;
+    await db.query('UPDATE shopping_list_items SET section_id = $1 WHERE id = $2', [currentSection, r.id]);
+  }
 }
 
 async function checkListAccess(app: FastifyInstance, listId: string, userId: string): Promise<string> {
@@ -77,14 +134,14 @@ export default async function shoppingRoutes(app: FastifyInstance) {
     const total = parseInt(countResult.rows[0].count, 10);
 
     const result = await app.pg.query(
-      `SELECT DISTINCT sl.*, u.name AS owner_name,
+      `SELECT DISTINCT sl.*, u.name AS owner_name, lower(sl.title) AS sort_title,
         (SELECT count(*) FROM shopping_list_items sli WHERE sli.list_id = sl.id AND sli.checked = false) AS unchecked_count,
         (SELECT count(*) FROM shopping_list_items sli WHERE sli.list_id = sl.id) AS total_items
        FROM shopping_lists sl
        JOIN users u ON u.id = sl.owner_user_id
        LEFT JOIN shopping_list_members slm ON slm.list_id = sl.id
        WHERE (sl.owner_user_id = $1 OR slm.user_id = $1) AND sl.archived = false
-       ORDER BY sl.updated_at DESC
+       ORDER BY sort_title ASC
        LIMIT $2 OFFSET $3`,
       [userId, pageSize, offset],
     );
@@ -98,6 +155,8 @@ export default async function shoppingRoutes(app: FastifyInstance) {
         uncheckedCount: parseInt(r.unchecked_count, 10),
         totalItems: parseInt(r.total_items, 10),
         archived: r.archived,
+        enabledFields: r.enabled_fields ?? ['quantity'],
+        customFieldLabel: r.custom_field_label ?? null,
         createdAt: r.created_at,
         updatedAt: r.updated_at,
       })),
@@ -110,10 +169,14 @@ export default async function shoppingRoutes(app: FastifyInstance) {
     const body = createListSchema.parse(request.body);
     const userId = request.user.sub;
 
+    const enabledFields = body.enabledFields !== undefined
+      ? Array.from(new Set(body.enabledFields))
+      : ['quantity'];
+
     const result = await app.pg.query(
-      `INSERT INTO shopping_lists (owner_user_id, title) VALUES ($1, $2)
-       RETURNING id, title, archived, created_at, updated_at`,
-      [userId, body.title],
+      `INSERT INTO shopping_lists (owner_user_id, title, enabled_fields, custom_field_label) VALUES ($1, $2, $3, $4)
+       RETURNING id, title, archived, enabled_fields, custom_field_label, created_at, updated_at`,
+      [userId, body.title, enabledFields, body.customFieldLabel?.trim() || null],
     );
     const list = result.rows[0];
 
@@ -121,6 +184,8 @@ export default async function shoppingRoutes(app: FastifyInstance) {
       id: list.id,
       title: list.title,
       archived: list.archived,
+      enabledFields: list.enabled_fields ?? ['quantity'],
+      customFieldLabel: list.custom_field_label ?? null,
       createdAt: list.created_at,
       updatedAt: list.updated_at,
     });
@@ -154,6 +219,8 @@ export default async function shoppingRoutes(app: FastifyInstance) {
       ownerName: r.owner_name,
       isOwner: r.owner_user_id === userId,
       archived: r.archived,
+      enabledFields: r.enabled_fields ?? ['quantity'],
+      customFieldLabel: r.custom_field_label ?? null,
       members: members.rows.map(m => ({
         userId: m.user_id,
         name: m.name,
@@ -178,6 +245,14 @@ export default async function shoppingRoutes(app: FastifyInstance) {
 
     if (body.title !== undefined) { sets.push(`title = $${idx++}`); values.push(body.title); }
     if (body.archived !== undefined) { sets.push(`archived = $${idx++}`); values.push(body.archived); }
+    if (body.enabledFields !== undefined) {
+      sets.push(`enabled_fields = $${idx++}`);
+      values.push(Array.from(new Set(body.enabledFields)));
+    }
+    if (body.customFieldLabel !== undefined) {
+      sets.push(`custom_field_label = $${idx++}`);
+      values.push(body.customFieldLabel?.trim() || null);
+    }
 
     if (sets.length === 0) throw new BadRequestError('No fields to update');
 
@@ -188,7 +263,14 @@ export default async function shoppingRoutes(app: FastifyInstance) {
     );
 
     const r = result.rows[0];
-    return { id: r.id, title: r.title, archived: r.archived, updatedAt: r.updated_at };
+    return {
+      id: r.id,
+      title: r.title,
+      archived: r.archived,
+      enabledFields: r.enabled_fields ?? ['quantity'],
+      customFieldLabel: r.custom_field_label ?? null,
+      updatedAt: r.updated_at,
+    };
   });
 
   // Delete shopping list (owner only)
@@ -310,6 +392,12 @@ export default async function shoppingRoutes(app: FastifyInstance) {
         unit: r.unit,
         notes: r.notes,
         category: r.category,
+        price: r.price != null ? parseFloat(r.price) : null,
+        vendor: r.vendor,
+        url: r.url,
+        customValue: r.custom_value,
+        isSection: r.is_section ?? false,
+        sectionId: r.section_id ?? null,
         checked: r.checked,
         checkedAt: r.checked_at,
         checkedByName: r.checked_by_name,
@@ -351,17 +439,35 @@ export default async function shoppingRoutes(app: FastifyInstance) {
     );
     const memoryId = memResult.rows[0].id;
 
-    // Get max sort_order
-    const maxSort = await app.pg.query(
-      'SELECT COALESCE(MAX(sort_order), -1) AS max_sort FROM shopping_list_items WHERE list_id = $1',
+    // Get sort_order extents — new rows always go to the top so they're
+    // immediately visible without scrolling.
+    const sortBounds = await app.pg.query(
+      'SELECT COALESCE(MAX(sort_order), -1) AS max_sort, COALESCE(MIN(sort_order), 0) AS min_sort FROM shopping_list_items WHERE list_id = $1',
       [listId],
     );
+    const newSort = sortBounds.rows[0].min_sort - 1;
 
     const result = await app.pg.query(
-      `INSERT INTO shopping_list_items (list_id, item_memory_id, display_name, normalized_name, quantity, unit, notes, category, created_by_user_id, sort_order)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO shopping_list_items (list_id, item_memory_id, display_name, normalized_name, quantity, unit, notes, category, price, vendor, url, custom_value, is_section, created_by_user_id, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
        RETURNING *`,
-      [listId, memoryId, body.displayName, normalized, body.quantity || null, null, null, null, userId, maxSort.rows[0].max_sort + 1],
+      [
+        listId,
+        memoryId,
+        body.displayName,
+        normalized,
+        body.quantity || null,
+        null,
+        body.notes?.trim() || null,
+        body.category ?? null,
+        body.price ?? null,
+        body.vendor?.trim() || null,
+        body.url?.trim() || null,
+        body.customValue?.trim() || null,
+        body.isSection ?? false,
+        userId,
+        newSort,
+      ],
     );
     const item = result.rows[0];
 
@@ -384,6 +490,12 @@ export default async function shoppingRoutes(app: FastifyInstance) {
       unit: item.unit,
       notes: item.notes,
       category: item.category,
+      price: item.price != null ? parseFloat(item.price) : null,
+      vendor: item.vendor,
+      url: item.url,
+      customValue: item.custom_value,
+      isSection: item.is_section ?? false,
+      sectionId: item.section_id ?? null,
       checked: item.checked,
       sortOrder: item.sort_order,
       createdAt: item.created_at,
@@ -409,6 +521,12 @@ export default async function shoppingRoutes(app: FastifyInstance) {
       values.push(body.displayName, normalizeItemName(body.displayName));
     }
     if (body.quantity !== undefined) { sets.push(`quantity = $${idx++}`); values.push(body.quantity); }
+    if (body.price !== undefined) { sets.push(`price = $${idx++}`); values.push(body.price); }
+    if (body.vendor !== undefined) { sets.push(`vendor = $${idx++}`); values.push(body.vendor?.trim() || null); }
+    if (body.url !== undefined) { sets.push(`url = $${idx++}`); values.push(body.url?.trim() || null); }
+    if (body.category !== undefined) { sets.push(`category = $${idx++}`); values.push(body.category); }
+    if (body.notes !== undefined) { sets.push(`notes = $${idx++}`); values.push(body.notes?.trim() || null); }
+    if (body.customValue !== undefined) { sets.push(`custom_value = $${idx++}`); values.push(body.customValue?.trim() || null); }
 
     if (sets.length === 0) throw new BadRequestError('No fields to update');
 
@@ -435,6 +553,10 @@ export default async function shoppingRoutes(app: FastifyInstance) {
       unit: item.unit,
       notes: item.notes,
       category: item.category,
+      price: item.price != null ? parseFloat(item.price) : null,
+      vendor: item.vendor,
+      url: item.url,
+      customValue: item.custom_value,
       checked: item.checked,
       updatedAt: item.updated_at,
     };
@@ -529,6 +651,10 @@ export default async function shoppingRoutes(app: FastifyInstance) {
           [i, body.itemIds[i], listId],
         );
       }
+      // Re-derive section membership from the new ordering so items dragged
+      // under a different store header are reassigned, while checked items keep
+      // their store.
+      await assignSectionIds(client, listId);
       await client.query('COMMIT');
     } catch (e) {
       await client.query('ROLLBACK');
@@ -724,5 +850,85 @@ export default async function shoppingRoutes(app: FastifyInstance) {
         purchaseCount: r.total_checked_count,
       })),
     };
+  });
+
+  // ========================
+  // ALEXA INTEGRATION (single-user, scalable)
+  // ========================
+  // Auth via shared secret in `apiKey` body field or `x-api-key` header.
+  // Configured via env: ALEXA_API_KEY, ALEXA_USER_ID, ALEXA_DEFAULT_LIST_ID.
+  // No JWT here because Alexa skill calls server-to-server with the secret.
+  const ALEXA_API_KEY = process.env.ALEXA_API_KEY || '';
+  const ALEXA_USER_ID = process.env.ALEXA_USER_ID || '';
+  const ALEXA_DEFAULT_LIST_ID = process.env.ALEXA_DEFAULT_LIST_ID || '';
+
+  const alexaAddItemSchema = z.object({
+    item: z.string().min(1).max(500),
+    listId: z.string().uuid().optional(),
+    apiKey: z.string().optional(),
+  });
+
+  app.post('/alexa/add-item', async (request, reply) => {
+    if (!ALEXA_API_KEY || !ALEXA_USER_ID || !ALEXA_DEFAULT_LIST_ID) {
+      throw new ForbiddenError('Alexa integration not configured');
+    }
+    const body = alexaAddItemSchema.safeParse(request.body);
+    if (!body.success) throw new BadRequestError('Invalid request');
+    const { item, listId, apiKey } = body.data;
+    const headerKey = request.headers['x-api-key'];
+    const providedKey = apiKey || (typeof headerKey === 'string' ? headerKey : '');
+    if (providedKey !== ALEXA_API_KEY) {
+      throw new ForbiddenError('Invalid API key');
+    }
+    const userId = ALEXA_USER_ID;
+    const targetListId = listId || ALEXA_DEFAULT_LIST_ID;
+
+    const listCheck = await app.pg.query(
+      'SELECT id FROM shopping_lists WHERE id = $1 AND owner_user_id = $2',
+      [targetListId, userId],
+    );
+    if (listCheck.rows.length === 0) throw new NotFoundError('List not found');
+
+    const normalized = normalizeItemName(item);
+    const memResult = await app.pg.query(
+      `INSERT INTO shopping_item_memory (user_id, normalized_name, preferred_display_name, total_added_count, last_added_at)
+       VALUES ($1, $2, $3, 1, now())
+       ON CONFLICT (user_id, normalized_name) DO UPDATE SET
+         total_added_count = shopping_item_memory.total_added_count + 1,
+         last_added_at = now(),
+         preferred_display_name = COALESCE(EXCLUDED.preferred_display_name, shopping_item_memory.preferred_display_name)
+       RETURNING id`,
+      [userId, normalized, item],
+    );
+    const memoryId = memResult.rows[0].id;
+
+    const sortBounds = await app.pg.query(
+      'SELECT COALESCE(MIN(sort_order), 0) AS min_sort FROM shopping_list_items WHERE list_id = $1',
+      [targetListId],
+    );
+    const newSort = sortBounds.rows[0].min_sort - 1;
+
+    const result = await app.pg.query(
+      `INSERT INTO shopping_list_items (list_id, item_memory_id, display_name, normalized_name, created_by_user_id, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, display_name, created_at`,
+      [targetListId, memoryId, item, normalized, userId, newSort],
+    );
+
+    await app.pg.query(
+      `INSERT INTO shopping_item_events (item_id, list_id, item_memory_id, event_type, actor_user_id, item_name)
+       VALUES ($1, $2, $3, 'added', $4, $5)`,
+      [result.rows[0].id, targetListId, memoryId, userId, item],
+    );
+    await app.pg.query('UPDATE shopping_lists SET updated_at = now() WHERE id = $1', [targetListId]);
+
+    return reply.status(201).send({
+      ok: true,
+      item: {
+        id: result.rows[0].id,
+        displayName: result.rows[0].display_name,
+        createdAt: result.rows[0].created_at,
+      },
+    });
   });
 }

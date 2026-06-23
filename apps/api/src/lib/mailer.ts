@@ -102,3 +102,138 @@ export function passwordResetEmail(resetUrl: string): { subject: string; text: s
   `);
   return { subject, text, html };
 }
+
+// --- Huddle summary email --------------------------------------------------
+
+export interface HuddleSummaryEmailPayload {
+  huddleTitle: string;
+  hostName: string | null;
+  intention: string | null;
+  endedAt: string | null;
+  shareUrl: string | null;
+  decisions: Array<{ topicTitle: string; decisionText: string; ownerName: string | null }>;
+  intentions: Array<{ text: string; ownerName: string | null; softDueText: string | null; status: string }>;
+  followups: Array<{ text: string; ownerName: string | null; reviewDate: string | null }>;
+  notes: Array<{ text: string; authorName: string | null }>;
+  hostSummary: string | null;
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+export function huddleSummaryEmail(p: HuddleSummaryEmailPayload): { subject: string; text: string; html: string } {
+  const subject = `Huddle summary: ${p.huddleTitle}`;
+
+  // ── Plain text ──────────────────────────────────────────────────────────
+  const txt: string[] = [];
+  txt.push(`Huddle summary: ${p.huddleTitle}`);
+  if (p.hostName) txt.push(`Host: ${p.hostName}`);
+  if (p.endedAt) txt.push(`Ended: ${new Date(p.endedAt).toLocaleString()}`);
+  if (p.intention) txt.push(`\nIntention: ${p.intention}`);
+
+  if (p.decisions.length) {
+    txt.push('\nDecisions:');
+    for (const d of p.decisions) {
+      txt.push(`  - ${d.topicTitle}: ${d.decisionText}${d.ownerName ? ` (owner: ${d.ownerName})` : ''}`);
+    }
+  }
+  if (p.intentions.length) {
+    txt.push('\nIntentions / next actions:');
+    for (const i of p.intentions) {
+      const tag = i.status === 'done' ? '[done] ' : '';
+      txt.push(`  - ${tag}${i.text}${i.ownerName ? ` — ${i.ownerName}` : ''}${i.softDueText ? ` (${i.softDueText})` : ''}`);
+    }
+  }
+  if (p.followups.length) {
+    txt.push('\nFollow-ups:');
+    for (const f of p.followups) {
+      txt.push(`  - ${f.text}${f.ownerName ? ` — ${f.ownerName}` : ''}${f.reviewDate ? ` (review ${f.reviewDate})` : ''}`);
+    }
+  }
+  if (p.notes.length) {
+    txt.push('\nNotes:');
+    for (const n of p.notes) {
+      txt.push(`  - ${n.text}${n.authorName ? ` — ${n.authorName}` : ''}`);
+    }
+  }
+  if (p.hostSummary) {
+    txt.push(`\nHost's summary:\n${p.hostSummary}`);
+  }
+  if (p.shareUrl) {
+    txt.push(`\nView online: ${p.shareUrl}`);
+  }
+
+  // ── HTML ────────────────────────────────────────────────────────────────
+  const sections: string[] = [];
+
+  if (p.intention) {
+    sections.push(`<p style="margin:0 0 16px;font-style:italic;color:#56607a;">“${escapeHtml(p.intention)}”</p>`);
+  }
+
+  if (p.decisions.length) {
+    sections.push(`<h3 style="margin:18px 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:0.06em;color:#8a90a8;">Decisions</h3>`);
+    sections.push('<ul style="margin:0 0 12px;padding-left:18px;">' +
+      p.decisions.map((d) =>
+        `<li style="margin:0 0 8px;"><strong>${escapeHtml(d.topicTitle)}:</strong> ${escapeHtml(d.decisionText)}${d.ownerName ? ` <span style="color:#8a90a8;">(${escapeHtml(d.ownerName)})</span>` : ''}</li>`,
+      ).join('') +
+      '</ul>');
+  }
+
+  if (p.intentions.length) {
+    sections.push(`<h3 style="margin:18px 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:0.06em;color:#8a90a8;">Intentions</h3>`);
+    sections.push('<ul style="margin:0 0 12px;padding-left:18px;">' +
+      p.intentions.map((i) => {
+        const done = i.status === 'done';
+        return `<li style="margin:0 0 6px;${done ? 'text-decoration:line-through;color:#8a90a8;' : ''}">${escapeHtml(i.text)}${i.ownerName ? ` <span style="color:#8a90a8;">— ${escapeHtml(i.ownerName)}</span>` : ''}${i.softDueText ? ` <span style="color:#8a90a8;">(${escapeHtml(i.softDueText)})</span>` : ''}</li>`;
+      }).join('') +
+      '</ul>');
+  }
+
+  if (p.followups.length) {
+    sections.push(`<h3 style="margin:18px 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:0.06em;color:#8a90a8;">Follow-ups</h3>`);
+    sections.push('<ul style="margin:0 0 12px;padding-left:18px;">' +
+      p.followups.map((f) =>
+        `<li style="margin:0 0 6px;">${escapeHtml(f.text)}${f.ownerName ? ` <span style="color:#8a90a8;">— ${escapeHtml(f.ownerName)}</span>` : ''}${f.reviewDate ? ` <span style="color:#8a90a8;">(review ${escapeHtml(f.reviewDate)})</span>` : ''}</li>`,
+      ).join('') +
+      '</ul>');
+  }
+
+  if (p.notes.length) {
+    sections.push(`<h3 style="margin:18px 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:0.06em;color:#8a90a8;">Notes</h3>`);
+    sections.push('<ul style="margin:0 0 12px;padding-left:18px;">' +
+      p.notes.map((n) =>
+        `<li style="margin:0 0 6px;">${escapeHtml(n.text)}${n.authorName ? ` <span style="color:#8a90a8;">— ${escapeHtml(n.authorName)}</span>` : ''}</li>`,
+      ).join('') +
+      '</ul>');
+  }
+
+  if (p.hostSummary) {
+    sections.push(`<h3 style="margin:18px 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:0.06em;color:#8a90a8;">Host's summary</h3>`);
+    sections.push(`<p style="margin:0 0 12px;white-space:pre-wrap;">${escapeHtml(p.hostSummary)}</p>`);
+  }
+
+  if (p.shareUrl) {
+    sections.push(
+      `<p style="margin:24px 0 4px;"><a href="${p.shareUrl}" style="display:inline-block;background:#191f4a;color:#fff;text-decoration:none;padding:10px 18px;border-radius:999px;font-weight:600;">View full summary online</a></p>`,
+    );
+  }
+
+  const heading = `Summary: ${escapeHtml(p.huddleTitle)}`;
+  const meta: string[] = [];
+  if (p.hostName) meta.push(`Hosted by ${escapeHtml(p.hostName)}`);
+  if (p.endedAt) meta.push(`Ended ${escapeHtml(new Date(p.endedAt).toLocaleString())}`);
+
+  const html = baseTemplate(heading, `
+    ${meta.length ? `<p style="margin:0 0 12px;color:#8a90a8;font-size:13px;">${meta.join(' &middot; ')}</p>` : ''}
+    ${sections.join('')}
+  `);
+
+  return { subject, text: txt.join('\n'), html };
+}
+

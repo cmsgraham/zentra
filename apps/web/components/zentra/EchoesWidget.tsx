@@ -31,8 +31,8 @@ export function EchoesWidget() {
 
   async function load() {
     try {
-      const r = await api<{ items: Echo[] }>('/reminders');
-      setEchoes(r.items);
+      const r = await api<{ items: Echo[] } | null>('/reminders');
+      if (r && r.items) setEchoes(r.items);
     } catch {
       // ignore
     } finally {

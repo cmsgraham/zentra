@@ -12,6 +12,11 @@ import MobileTopBar from '@/components/mobile/MobileTopBar';
 import MobileBottomNav from '@/components/mobile/MobileBottomNav';
 import MobileDrawer from '@/components/mobile/MobileDrawer';
 import EmailVerifyBanner from '@/components/layout/EmailVerifyBanner';
+import OfflineBanner from '@/components/layout/OfflineBanner';
+import PasskeyEnrollPrompt from '@/components/auth/PasskeyEnrollPrompt';
+import ProductTour from '@/components/tour/ProductTour';
+import TourLegend from '@/components/tour/TourLegend';
+import { useTour } from '@/lib/useTour';
 
 interface Workspace {
   id: string;
@@ -24,12 +29,18 @@ function getMobileTitle(pathname: string, workspaceName?: string): string {
   if (pathname === '/onboarding') return 'Getting started';
   if (pathname.startsWith('/lists/') && pathname !== '/lists') return 'List';
   if (pathname === '/lists') return 'Lists';
+  if (pathname.startsWith('/budget/') && pathname !== '/budget') return 'Budget Space';
+  if (pathname === '/budget') return 'Budget';
   if (pathname.startsWith('/shopping/import')) return 'AI Import';
   if (pathname.startsWith('/shopping/insights')) return 'Insights';
   if (pathname.startsWith('/shopping/') && pathname !== '/shopping') return 'List';
   if (pathname === '/shopping') return 'Lists';
   if (pathname === '/friends') return 'Friends';
   if (pathname === '/reminders') return 'Echoes';
+  if (pathname === '/huddles') return 'Huddles';
+  if (pathname === '/huddles/new') return 'Start a Huddle';
+  if (pathname === '/huddles/templates') return 'Huddle templates';
+  if (pathname.startsWith('/huddles/')) return 'Huddle';
   if (pathname.includes('/planner')) return workspaceName || 'Canvas';
   if (pathname.includes('/blocked')) return 'Waiting on…';
   if (pathname.includes('/archive')) return 'Archive';
@@ -51,9 +62,12 @@ export default function AuthenticatedLayout({ children }: { children: React.Reac
   const currentWorkspaceId = params.workspaceId as string | undefined;
   const hydrateSession = useFocusStore((s) => s.hydrate);
   const subscribeFocusSync = useFocusStore((s) => s.subscribeSync);
+  const autoStartTour = useTour((s) => s.autoStart);
 
   useEffect(() => { if (user) hydrateSession(); }, [user, hydrateSession]);
   useEffect(() => subscribeFocusSync(), [subscribeFocusSync]);
+  // Kick off the product tour for first-time users (no-op if already done).
+  useEffect(() => { if (user) autoStartTour(); }, [user, autoStartTour]);
 
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [wsOpen, setWsOpen] = useState(false);
@@ -69,7 +83,15 @@ export default function AuthenticatedLayout({ children }: { children: React.Reac
 
   useEffect(() => {
     if (user) {
-      api<{ items: Workspace[] }>('/workspaces').then((d) => setWorkspaces(d.items)).catch(() => {});
+      api<{ items: Workspace[] }>('/workspaces')
+        .then((d) =>
+          setWorkspaces(
+            [...d.items].sort((a, b) =>
+              a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
+            ),
+          ),
+        )
+        .catch(() => {});
     }
   }, [user]);
 
@@ -102,13 +124,17 @@ export default function AuthenticatedLayout({ children }: { children: React.Reac
     return (
       <div className="min-h-screen flex flex-col" style={{ background: 'var(--ink-bg)' }}>
         <MobileTopBar title={title} onMenuPress={() => setDrawerOpen(true)} logoSrc={logoSrc} />
+        <OfflineBanner />
         <EmailVerifyBanner />
+        <PasskeyEnrollPrompt />
         <main className="flex-1 overflow-y-auto" style={{ paddingBottom: '64px' }}>
           {children}
         </main>
         <MobileBottomNav onMorePress={() => setDrawerOpen(true)} />
         <MobileDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} workspaces={workspaces} />
         <FocusOverlay />
+        <ProductTour />
+        <TourLegend />
       </div>
     );
   }
@@ -121,7 +147,11 @@ export default function AuthenticatedLayout({ children }: { children: React.Reac
         style={{ background: 'var(--ink-surface)', borderBottom: '1px solid var(--ink-border-subtle)' }}
       >
         <div className="flex items-center gap-5">
-          <a href="/today" className="flex items-center opacity-90 hover:opacity-100 transition-opacity">
+          <a
+            href="/today"
+            data-tour-label="Zentra — back to Flow"
+            className="flex items-center opacity-90 hover:opacity-100 transition-opacity"
+          >
             <img
               src={theme === 'dark' ? '/zentra_nombre_blanco.png' : '/zentra_nombre_azul.png'}
               alt="Zentra"
@@ -209,29 +239,58 @@ export default function AuthenticatedLayout({ children }: { children: React.Reac
         <div className="flex items-center gap-1">
           <button
             onClick={() => router.push('/today')}
+            data-tour="today"
+            data-tour-label="Flow — your daily focus view"
             className="z-btn-ghost z-btn-sm rounded-md"
             style={{ color: pathname === '/today' ? 'var(--ink-accent)' : 'var(--ink-text-muted)', fontSize: '0.8125rem', fontWeight: pathname === '/today' ? 600 : 400 }}
           >
             Flow
           </button>
-          {!pathname.startsWith('/planner') && (
-            <button
-              onClick={() => router.push('/workspaces')}
-              className="z-btn-ghost z-btn-sm rounded-md"
-              style={{ color: pathname.startsWith('/workspaces') ? 'var(--ink-accent)' : 'var(--ink-text-muted)', fontSize: '0.8125rem' }}
-            >
-              Studio
-            </button>
-          )}
+          {/* Studio is always available, even from Planner views, so users
+              never lose their way back to the board. */}
+          <button
+            onClick={() => router.push('/workspaces')}
+            className="z-btn-ghost z-btn-sm rounded-md"
+            style={{ color: pathname.startsWith('/workspaces') ? 'var(--ink-accent)' : 'var(--ink-text-muted)', fontSize: '0.8125rem' }}
+          >
+            Studio
+          </button>
+          <button
+            onClick={() => router.push('/budget')}
+            className="z-btn-ghost z-btn-sm rounded-md"
+            style={{ color: pathname.startsWith('/budget') ? 'var(--ink-accent)' : 'var(--ink-text-muted)', fontSize: '0.8125rem' }}
+          >
+            Budget
+          </button>
           <button
             onClick={() => router.push('/lists')}
+            data-tour="lists"
+            data-tour-label="Lists — shopping & checklists"
             className="z-btn-ghost z-btn-sm rounded-md"
             style={{ color: pathname.startsWith('/lists') || pathname.startsWith('/shopping') ? 'var(--ink-accent)' : 'var(--ink-text-muted)', fontSize: '0.8125rem' }}
           >
             Lists
           </button>
           <button
+            onClick={() => router.push('/friends')}
+            className="z-btn-ghost z-btn-sm rounded-md"
+            style={{ color: pathname.startsWith('/friends') ? 'var(--ink-accent)' : 'var(--ink-text-muted)', fontSize: '0.8125rem' }}
+          >
+            Friends
+          </button>
+          <button
+            onClick={() => router.push('/huddles')}
+            data-tour="huddles"
+            data-tour-label="Huddles — structured conversations that move work forward"
+            className="z-btn-ghost z-btn-sm rounded-md"
+            style={{ color: pathname.startsWith('/huddles') ? 'var(--ink-accent)' : 'var(--ink-text-muted)', fontSize: '0.8125rem' }}
+          >
+            Huddles
+          </button>
+          <button
             onClick={() => router.push('/reminders')}
+            data-tour="echoes"
+            data-tour-label="Echoes — gentle reminders"
             className="z-btn-ghost z-btn-sm rounded-md"
             style={{ color: pathname.startsWith('/reminders') ? 'var(--ink-accent)' : 'var(--ink-text-muted)', fontSize: '0.8125rem' }}
           >
@@ -255,7 +314,23 @@ export default function AuthenticatedLayout({ children }: { children: React.Reac
             )}
           </button>
           <button
+            onClick={() => router.push('/help')}
+            data-tour="help"
+            data-tour-label="Help — guide, FAQ & replay tour"
+            className="z-btn-ghost z-btn-icon rounded-md"
+            style={{ color: pathname === '/help' ? 'var(--ink-accent)' : 'var(--ink-text-muted)', width: '30px', height: '30px' }}
+            title="Guide & help"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.5-2.5 2-2.5 4"/>
+              <line x1="12" y1="17" x2="12" y2="17.01"/>
+            </svg>
+          </button>
+          <button
             onClick={() => router.push('/settings')}
+            data-tour="profile"
+            data-tour-label="Profile & Settings — preferences and tour replay"
             className="z-btn-ghost z-btn-icon rounded-md"
             style={{ color: 'var(--ink-text-muted)', width: '30px', height: '30px' }}
             title="Settings"
@@ -275,9 +350,13 @@ export default function AuthenticatedLayout({ children }: { children: React.Reac
           </button>
         </div>
       </header>
+      <OfflineBanner />
       <EmailVerifyBanner />
+      <PasskeyEnrollPrompt />
       <main className="flex-1">{children}</main>
       <FocusOverlay />
+      <ProductTour />
+      <TourLegend />
     </div>
   );
 }

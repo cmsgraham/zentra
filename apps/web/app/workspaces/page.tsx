@@ -37,6 +37,10 @@ export default function WorkspacesPage() {
   const [savingRename, setSavingRename] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
 
+  // Delete flow
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   useEffect(() => { loadWorkspaces(); loadInvites(); }, []);
 
   async function loadWorkspaces() {
@@ -106,6 +110,22 @@ export default function WorkspacesPage() {
     }
   }
 
+  async function handleDelete() {
+    if (!renamingId) return;
+    if (!confirm('Delete this space? This cannot be undone. All intentions, notes, and data will be lost.')) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await api(`/workspaces/${renamingId}`, { method: 'DELETE' });
+      setWorkspaces((prev) => prev.filter((w) => w.id !== renamingId));
+      cancelRename();
+    } catch (err: any) {
+      setDeleteError(err?.message || 'Could not delete');
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   return (
     <AuthShell>
       <div className="min-h-[calc(100vh-56px)] flex flex-col">
@@ -114,7 +134,7 @@ export default function WorkspacesPage() {
         <div className="flex-1 max-w-2xl w-full mx-auto px-6 pt-10 pb-10">
 
           {/* Minimal header with inline create button */}
-          <div className="flex items-center justify-between mb-10">
+          <div className="flex items-center justify-between mb-10" data-tour="studio" data-tour-label="Studio — home for all your Spaces">
             <div>
               <h1 className="text-xl font-semibold tracking-tight">Studio</h1>
               <p className="text-xs mt-1" style={{ color: 'var(--ink-text-muted)' }}>
@@ -123,6 +143,8 @@ export default function WorkspacesPage() {
             </div>
             <button
               onClick={() => setShowCreate(true)}
+              data-tour="create-space"
+              data-tour-label="Create a new Space"
               className="z-btn z-btn-primary"
             >
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -287,6 +309,8 @@ export default function WorkspacesPage() {
             <form
               onClick={(e) => e.stopPropagation()}
               onSubmit={handleCreate}
+              data-tour="name-space"
+              data-tour-label="Name your Space"
               className="w-full max-w-sm rounded-2xl p-6 space-y-5"
               style={{
                 background: 'var(--ink-surface)',
@@ -353,7 +377,7 @@ export default function WorkspacesPage() {
               <div>
                 <h2 className="text-lg font-semibold">Rename space</h2>
                 <p className="text-xs mt-1" style={{ color: 'var(--ink-text-muted)' }}>
-                  Only owners and admins can rename.
+                  Only owners and admins can rename or delete.
                 </p>
               </div>
               <input
@@ -372,23 +396,37 @@ export default function WorkspacesPage() {
               {renameError && (
                 <p className="text-xs" style={{ color: 'var(--ink-blocked)' }}>{renameError}</p>
               )}
-              <div className="flex gap-2 justify-end pt-1">
+              {deleteError && (
+                <p className="text-xs" style={{ color: 'var(--ink-blocked)' }}>{deleteError}</p>
+              )}
+              <div className="flex gap-2 justify-between pt-1">
                 <button
                   type="button"
-                  onClick={cancelRename}
+                  onClick={handleDelete}
+                  disabled={deleting}
                   className="px-4 py-2.5 rounded-xl text-sm font-medium transition-colors"
-                  style={{ color: 'var(--ink-text-muted)' }}
+                  style={{ color: 'var(--ink-blocked)', border: '1px solid var(--ink-blocked)', background: deleting ? 'var(--ink-blocked-bg)' : 'transparent' }}
                 >
-                  Cancel
+                  {deleting ? 'Deleting…' : 'Delete'}
                 </button>
-                <button
-                  type="submit"
-                  disabled={savingRename || !renameValue.trim()}
-                  className="px-5 py-2.5 rounded-lg text-sm font-medium text-white disabled:opacity-50 transition-colors hover:opacity-90 active:scale-[0.97]"
-                  style={{ background: 'var(--ink-accent)' }}
-                >
-                  {savingRename ? 'Saving…' : 'Rename'}
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={cancelRename}
+                    className="px-4 py-2.5 rounded-xl text-sm font-medium transition-colors"
+                    style={{ color: 'var(--ink-text-muted)' }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingRename || !renameValue.trim()}
+                    className="px-5 py-2.5 rounded-lg text-sm font-medium text-white disabled:opacity-50 transition-colors hover:opacity-90 active:scale-[0.97]"
+                    style={{ background: 'var(--ink-accent)' }}
+                  >
+                    {savingRename ? 'Saving…' : 'Rename'}
+                  </button>
+                </div>
               </div>
             </form>
           </div>

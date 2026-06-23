@@ -13,6 +13,7 @@ import { getEnv } from './lib/env.js';
 
 import authRoutes from './modules/auth/routes.js';
 import googleAuthRoutes from './modules/auth/google.js';
+import passkeyRoutes from './modules/auth/passkeys.js';
 import workspaceRoutes from './modules/workspaces/routes.js';
 import tagRoutes from './modules/tags/routes.js';
 import taskRoutes from './modules/tasks/routes.js';
@@ -33,6 +34,11 @@ import priorityRoutes from './modules/priority/routes.js';
 import focusRoutes from './modules/focus/routes.js';
 import stuckRoutes from './modules/stuck/routes.js';
 import reflectionRoutes from './modules/reflections/routes.js';
+import supportRoutes from './modules/support/routes.js';
+import adminRoutes from './modules/admin/routes.js';
+import huddleRoutes from './modules/huddles/routes.js';
+import budgetRoutes from './modules/budget/routes.js';
+import payrollRoutes from './modules/payroll/routes.js';
 
 export async function buildApp() {
   const app = Fastify({
@@ -136,6 +142,7 @@ export async function buildApp() {
   // Routes
   await app.register(authRoutes, { prefix: '/auth' });
   await app.register(googleAuthRoutes, { prefix: '/auth' });
+  await app.register(passkeyRoutes, { prefix: '/auth' });
   await app.register(workspaceRoutes);
   await app.register(tagRoutes);
   await app.register(taskRoutes);
@@ -156,6 +163,11 @@ export async function buildApp() {
   await app.register(focusRoutes);
   await app.register(stuckRoutes);
   await app.register(reflectionRoutes);
+  await app.register(supportRoutes);
+  await app.register(adminRoutes);
+  await app.register(huddleRoutes);
+  await app.register(budgetRoutes);
+  await app.register(payrollRoutes);
 
   return app;
 }

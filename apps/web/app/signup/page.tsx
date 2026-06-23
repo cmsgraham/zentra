@@ -15,9 +15,47 @@ export default function SignupPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [inAppBrowser, setInAppBrowser] = useState(false);
+  const [googleEnabled, setGoogleEnabled] = useState(false);
   const { theme, init: initTheme } = useTheme();
 
   useEffect(() => { initTheme(); }, [initTheme]);
+
+  // Hide Google button when the API doesn't have OAuth credentials configured.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/auth/config', { credentials: 'include' });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setGoogleEnabled(!!data?.googleEnabled);
+      } catch {
+        // Leave hidden on failure.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Detect in-app / embedded browsers that Google blocks for OAuth.
+  useEffect(() => {
+    if (typeof navigator === 'undefined') return;
+    const ua = navigator.userAgent || '';
+    const patterns = [
+      /FBAN|FBAV|FB_IAB|FBIOS/i,
+      /Instagram/i,
+      /Line\//i,
+      /MicroMessenger/i,
+      /Twitter/i,
+      /TikTok/i,
+      /Snapchat/i,
+      /LinkedInApp/i,
+      /GSA\//i,
+      /Pinterest/i,
+      /; wv\)/i,
+    ];
+    setInAppBrowser(patterns.some((p) => p.test(ua)));
+  }, []);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -55,23 +93,49 @@ export default function SignupPage() {
             </div>
           )}
 
-          <a
-            href="/api/auth/google"
-            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium transition-colors"
-            style={{
-              background: 'var(--ink-bg)',
-              color: 'var(--ink-text)',
-              border: '1px solid var(--ink-border)',
-            }}
-          >
-            <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-              <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/>
-              <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.259c-.806.54-1.836.86-3.048.86-2.345 0-4.328-1.583-5.036-3.71H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
-              <path fill="#FBBC05" d="M3.964 10.707A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.707V4.961H.957A8.997 8.997 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z"/>
-              <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.166 6.655 3.58 9 3.58z"/>
-            </svg>
-            Continue with Google
-          </a>
+          {googleEnabled && (
+            <a
+              href="/api/auth/google"
+              onClick={(e) => {
+                if (inAppBrowser) {
+                  e.preventDefault();
+                  const url = 'https://usezentra.app/signup';
+                  try { navigator.clipboard?.writeText(url); } catch {}
+                  setError(
+                    "Google blocks sign-in inside in-app browsers. Tap the ⋯ menu and choose \"Open in Safari\" or \"Open in Chrome\". The link has been copied.",
+                  );
+                }
+              }}
+              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium transition-colors"
+              style={{
+                background: 'var(--ink-bg)',
+                color: 'var(--ink-text)',
+                border: '1px solid var(--ink-border)',
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+                <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/>
+                <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.259c-.806.54-1.836.86-3.048.86-2.345 0-4.328-1.583-5.036-3.71H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
+                <path fill="#FBBC05" d="M3.964 10.707A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.707V4.961H.957A8.997 8.997 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z"/>
+                <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.166 6.655 3.58 9 3.58z"/>
+              </svg>
+              Continue with Google
+            </a>
+          )}
+
+          {googleEnabled && inAppBrowser && (
+            <div
+              className="text-xs px-3 py-2 rounded-lg"
+              style={{
+                background: 'color-mix(in srgb, var(--ink-warn, #b45309) 8%, transparent)',
+                color: 'var(--ink-text-secondary)',
+                border: '1px solid color-mix(in srgb, var(--ink-warn, #b45309) 25%, transparent)',
+              }}
+            >
+              It looks like you&apos;re in an in-app browser. Google sign-in is blocked
+              here — please open this page in Safari or Chrome, or sign up with email below.
+            </div>
+          )}
 
           <div className="flex items-center gap-3 text-xs" style={{ color: 'var(--ink-text-muted)' }}>
             <div className="flex-1 h-px" style={{ background: 'var(--ink-border)' }} />

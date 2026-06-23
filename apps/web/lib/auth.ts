@@ -16,6 +16,7 @@ interface User {
   twoFactorEnabled?: boolean;
   googleLinked?: boolean;
   hasPassword?: boolean;
+  role?: 'user' | 'admin';
 }
 
 type LoginResult =

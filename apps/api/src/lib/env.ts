@@ -31,6 +31,10 @@ const envSchema = z.object({
   // Google OAuth (set both to empty to disable the "Sign in with Google" button)
   GOOGLE_CLIENT_ID: z.string().default(''),
   GOOGLE_CLIENT_SECRET: z.string().default(''),
+
+  // Admin allowlist — comma-separated emails. Promoted to platform_role='admin'
+  // automatically on next login.
+  ADMIN_EMAILS: z.string().default(''),
 });
 
 export type Env = z.infer<typeof envSchema>;
