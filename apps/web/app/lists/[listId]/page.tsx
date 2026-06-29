@@ -854,11 +854,21 @@ function ItemRowContent({ item, rowNumber, isMobile, list, onToggle, onDelete, o
               rel="noopener noreferrer nofollow"
               onClick={(e) => {
                 e.stopPropagation();
-                // In standalone PWA mode a plain target="_blank" navigates
-                // inside the app window. Force a real separate browser window
-                // via window.open so the product link never replaces Zentra.
-                e.preventDefault();
-                window.open(item.url!, '_blank', 'noopener,noreferrer');
+                // In standalone PWA mode a plain target="_blank" can navigate
+                // inside the app window, so force a real separate browser
+                // window via window.open. In a normal browser tab we must let
+                // the native anchor handle the click — a script-initiated
+                // window.open (with noopener) is silently blocked by popup
+                // blockers in many browsers/mobile webviews, which left the
+                // link doing nothing.
+                const isStandalone =
+                  typeof window !== 'undefined' &&
+                  (window.matchMedia?.('(display-mode: standalone)').matches ||
+                    (window.navigator as Navigator & { standalone?: boolean }).standalone === true);
+                if (isStandalone) {
+                  e.preventDefault();
+                  window.open(item.url!, '_blank', 'noopener,noreferrer');
+                }
               }}
               aria-label={`Open product page for ${item.displayName}`}
               title="Open product link"
