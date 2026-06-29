@@ -277,14 +277,17 @@ export default function ListDetailPage() {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
 
-    const unchecked = buildSectionLayout(items.filter((it) => !it.checked));
-    const checked = items.filter((it) => it.checked);
-    const oldIndex = unchecked.findIndex((it) => it.id === active.id);
-    const newIndex = unchecked.findIndex((it) => it.id === over.id);
+    // Operate on the exact same grouped layout that is rendered (and that the
+    // SortableContext is built from) so drop positions and section membership
+    // line up. Checked rows are part of this layout (measured but not
+    // draggable), so dropping next to one resolves to the right slot/section.
+    const layout = buildGroupedLayout(items);
+    const oldIndex = layout.findIndex((it) => it.id === active.id);
+    const newIndex = layout.findIndex((it) => it.id === over.id);
     if (oldIndex === -1 || newIndex === -1) return;
 
-    const reordered = arrayMove(unchecked, oldIndex, newIndex);
-    const next = recomputeSectionIds([...reordered, ...checked]);
+    const reordered = arrayMove(layout, oldIndex, newIndex);
+    const next = recomputeSectionIds(reordered);
     setItems(next);
     try {
       await api(`/shopping/lists/${listId}/reorder`, {
@@ -577,7 +580,7 @@ export default function ListDetailPage() {
               </p>
             ) : (
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                <SortableContext items={buildSectionLayout(items.filter((it) => !it.checked)).map((it) => it.id)} strategy={verticalListSortingStrategy}>
+                <SortableContext items={buildGroupedLayout(items).map((it) => it.id)} strategy={verticalListSortingStrategy}>
                   <div className="space-y-1">
                     {(() => {
                       const q = search.trim().toLowerCase();
@@ -641,25 +644,15 @@ export default function ListDetailPage() {
                             </p>
                           )}
                           {layout.map((item) => {
-                            // Checked, non-section items render as a static
-                            // (non-draggable) row, marked in place within their
-                            // subgroup.
-                            if (!item.isSection && item.checked) {
-                              return (
-                                <ItemRow
-                                  key={item.id}
-                                  item={item}
-                                  rowNumber={null}
-                                  isMobile={isMobile}
-                                  list={list}
-                                  onToggle={toggleItem}
-                                  onDelete={deleteItem}
-                                  onEdit={setEditingItem}
-                                />
-                              );
-                            }
-                            // Sections and unchecked items stay draggable.
-                            const rowNumber = item.isSection ? 0 : (rowNo += 1);
+                            // Every row lives in the sortable context. Checked
+                            // rows are measured (so drops resolve correctly) but
+                            // disabled from dragging and shown with the ✓ marker
+                            // (rowNumber null) in place within their subgroup.
+                            const rowNumber = item.isSection
+                              ? 0
+                              : item.checked
+                                ? null
+                                : (rowNo += 1);
                             return (
                               <SortableItemRow
                                 key={item.id}
@@ -983,25 +976,6 @@ function ItemRowContent({ item, rowNumber, isMobile, list, onToggle, onDelete, o
   );
 }
 
-function ItemRow(props: RowProps) {
-  const isSection = !!props.item.isSection;
-  return (
-    <div
-      className="flex items-center gap-3 px-3 py-2 rounded-xl group"
-      style={{
-        background: isSection ? 'transparent' : 'var(--ink-surface)',
-        border: isSection ? 'none' : '1px solid var(--ink-border)',
-        borderBottom: isSection ? '1px solid var(--ink-border)' : '1px solid var(--ink-border)',
-        borderRadius: isSection ? '0' : undefined,
-        minHeight: props.isMobile ? '56px' : 'auto',
-        marginTop: isSection ? '12px' : undefined,
-      }}
-    >
-      <ItemRowContent {...props} />
-    </div>
-  );
-}
-
 function SortableItemRow(props: RowProps) {
   const {
     attributes,
@@ -1011,7 +985,7 @@ function SortableItemRow(props: RowProps) {
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: props.item.id });
+  } = useSortable({ id: props.item.id, disabled: !!props.item.checked });
 
   const isSection = !!props.item.isSection;
   const style: React.CSSProperties = {
