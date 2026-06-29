@@ -102,6 +102,32 @@ function buildSectionLayout(unchecked: ListItem[]): ListItem[] {
   return result;
 }
 
+// Lay out every item (checked AND unchecked) under its section header using the
+// persisted `sectionId`. Within each group, unchecked items come first and
+// checked items sink to the bottom — but they stay in the same subgroup, so an
+// item's affinity to a section survives being checked/unchecked and only
+// changes when the item is moved to another subgroup. Items with no section (or
+// whose section header is missing) are grouped at the top.
+function buildGroupedLayout(all: ListItem[]): ListItem[] {
+  const sections = all.filter((it) => it.isSection);
+  const sectionIds = new Set(sections.map((s) => s.id));
+  const inGroup = (it: ListItem, sectionId: string | null) => {
+    const sid = it.sectionId && sectionIds.has(it.sectionId) ? it.sectionId : null;
+    return sid === sectionId;
+  };
+  const collect = (sectionId: string | null) => {
+    const members = all.filter((it) => !it.isSection && inGroup(it, sectionId));
+    return [...members.filter((it) => !it.checked), ...members.filter((it) => it.checked)];
+  };
+
+  const result: ListItem[] = [...collect(null)];
+  for (const sec of sections) {
+    result.push(sec);
+    result.push(...collect(sec.id));
+  }
+  return result;
+}
+
 // Mirror the server's section assignment after a drag so the optimistic state
 // stays consistent without a refetch: walk the new order, tracking the current
 // section header, and stamp unchecked items; checked items keep their section.
@@ -568,7 +594,6 @@ export default function ListDetailPage() {
                       const unchecked = q
                         ? visible.filter((it) => !it.checked)
                         : buildSectionLayout(visible.filter((it) => !it.checked));
-                      const checked = visible.filter((it) => it.checked);
                       // Build the list of URLs that belong under each
                       // unchecked section header. Items above the first
                       // section are bundled into that first section's
@@ -596,39 +621,60 @@ export default function ListDetailPage() {
                         }
                         flush();
                       }
+                      // Render every item in section order. Checked items stay
+                      // under their section header (shown marked in place) so an
+                      // item's subgroup affinity never changes just because it
+                      // was bought/checked — it persists until the item is moved
+                      // to another subgroup.
+                      const layout = q
+                        ? [
+                            ...visible.filter((it) => !it.checked),
+                            ...visible.filter((it) => it.checked),
+                          ]
+                        : buildGroupedLayout(visible);
+                      let rowNo = 0;
                       return (
                         <>
-                          {q && unchecked.length === 0 && checked.length === 0 && (
+                          {q && layout.length === 0 && (
                             <p className="text-center py-8 text-sm" style={{ color: 'var(--ink-text-muted)' }}>
                               No items match “{search}”.
                             </p>
                           )}
-                          {unchecked.map((item, idx) => (
-                            <SortableItemRow
-                              key={item.id}
-                              item={item}
-                              rowNumber={idx + 1}
-                              isMobile={isMobile}
-                              list={list}
-                              onToggle={toggleItem}
-                              onDelete={deleteItem}
-                              onEdit={setEditingItem}
-                              onOpenUrls={openUrlsInBackground}
-                              sectionUrls={sectionUrls.get(item.id)}
-                            />
-                          ))}
-                          {checked.map((item) => (
-                            <ItemRow
-                              key={item.id}
-                              item={item}
-                              rowNumber={null}
-                              isMobile={isMobile}
-                              list={list}
-                              onToggle={toggleItem}
-                              onDelete={deleteItem}
-                              onEdit={setEditingItem}
-                            />
-                          ))}
+                          {layout.map((item) => {
+                            // Checked, non-section items render as a static
+                            // (non-draggable) row, marked in place within their
+                            // subgroup.
+                            if (!item.isSection && item.checked) {
+                              return (
+                                <ItemRow
+                                  key={item.id}
+                                  item={item}
+                                  rowNumber={null}
+                                  isMobile={isMobile}
+                                  list={list}
+                                  onToggle={toggleItem}
+                                  onDelete={deleteItem}
+                                  onEdit={setEditingItem}
+                                />
+                              );
+                            }
+                            // Sections and unchecked items stay draggable.
+                            const rowNumber = item.isSection ? 0 : (rowNo += 1);
+                            return (
+                              <SortableItemRow
+                                key={item.id}
+                                item={item}
+                                rowNumber={rowNumber}
+                                isMobile={isMobile}
+                                list={list}
+                                onToggle={toggleItem}
+                                onDelete={deleteItem}
+                                onEdit={setEditingItem}
+                                onOpenUrls={openUrlsInBackground}
+                                sectionUrls={sectionUrls.get(item.id)}
+                              />
+                            );
+                          })}
                         </>
                       );
                     })()}
