@@ -304,13 +304,47 @@ export default function ListDetailPage() {
     loadItems();
   }
 
-  async function saveEditedItem(patch: Partial<ListItem> & { url?: string | null }) {    if (!editingItem) return;
+  async function saveEditedItem(patch: Partial<ListItem> & { url?: string | null }) {
+    if (!editingItem) return;
     const id = editingItem.id;
-    // Optimistic local merge — keeps the row visible while the request flies.
-    setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)));
     setEditingItem(null);
+
+    // Separate a subgroup (section) change from plain field edits: field edits
+    // go through PATCH, while moving an item to another subgroup is persisted as
+    // a reorder so the server's position-based section derivation agrees and the
+    // assignment sticks (instead of being recomputed away on the next drag).
+    const hasSection = Object.prototype.hasOwnProperty.call(patch, 'sectionId');
+    const newSectionId = hasSection ? (patch.sectionId ?? null) : undefined;
+    const sectionChanged = hasSection && newSectionId !== (editingItem.sectionId ?? null);
+    const fieldPatch: Record<string, unknown> = { ...patch };
+    delete fieldPatch.sectionId;
+
+    // Optimistic local state. Merge field edits, then (if the subgroup changed)
+    // drop the item at the bottom of the target subgroup and regroup.
+    let next = items.map((it) =>
+      it.id === id
+        ? { ...it, ...fieldPatch, ...(hasSection ? { sectionId: newSectionId } : {}) }
+        : it,
+    );
+    let reordered: ListItem[] | null = null;
+    if (sectionChanged) {
+      const moving = next.find((it) => it.id === id)!;
+      const rest = next.filter((it) => it.id !== id);
+      reordered = buildGroupedLayout([...rest, moving]);
+      next = reordered;
+    }
+    setItems(next);
+
     try {
-      await api(`/shopping/items/${id}`, { method: 'PATCH', body: patch });
+      if (Object.keys(fieldPatch).length > 0) {
+        await api(`/shopping/items/${id}`, { method: 'PATCH', body: fieldPatch });
+      }
+      if (reordered) {
+        await api(`/shopping/lists/${listId}/reorder`, {
+          method: 'POST',
+          body: { itemIds: reordered.map((it) => it.id) },
+        });
+      }
     } catch {
       loadItems();
     }
@@ -755,6 +789,7 @@ export default function ListDetailPage() {
         <EditItemModal
           item={editingItem}
           list={list}
+          sections={items.filter((it) => it.isSection)}
           onClose={() => setEditingItem(null)}
           onSave={saveEditedItem}
         />
@@ -1022,11 +1057,12 @@ function SortableItemRow(props: RowProps) {
 interface EditItemModalProps {
   item: ListItem;
   list: ListDetail;
+  sections: ListItem[];
   onClose: () => void;
   onSave: (patch: Partial<ListItem> & { url?: string | null }) => void;
 }
 
-function EditItemModal({ item, list, onClose, onSave }: EditItemModalProps) {
+function EditItemModal({ item, list, sections, onClose, onSave }: EditItemModalProps) {
   const fields = list.enabledFields ?? ['quantity'];
   const isSection = !!item.isSection;
   const [name, setName] = useState(item.displayName);
@@ -1037,6 +1073,7 @@ function EditItemModal({ item, list, onClose, onSave }: EditItemModalProps) {
   const [notes, setNotes] = useState(item.notes ?? '');
   const [url, setUrl] = useState(item.url ?? '');
   const [customValue, setCustomValue] = useState(item.customValue ?? '');
+  const [sectionId, setSectionId] = useState<string>(item.sectionId ?? '');
   const [saving, setSaving] = useState(false);
 
   function submit(e: React.FormEvent) {
@@ -1056,6 +1093,7 @@ function EditItemModal({ item, list, onClose, onSave }: EditItemModalProps) {
       if (fields.includes('notes')) patch.notes = notes.trim() || null;
       if (fields.includes('url')) patch.url = url.trim() ? normalizeProductUrl(url.trim()) : null;
       if (fields.includes('custom')) patch.customValue = customValue.trim() || null;
+      if (sections.length > 0) patch.sectionId = sectionId || null;
     }
     onSave(patch);
     setSaving(false);
@@ -1083,6 +1121,25 @@ function EditItemModal({ item, list, onClose, onSave }: EditItemModalProps) {
         />
         {!isSection && (
           <>
+            {sections.length > 0 && (
+              <label className="block">
+                <span className="text-xs" style={{ color: 'var(--ink-text-muted)' }}>
+                  Subgroup
+                </span>
+                <select
+                  value={sectionId}
+                  onChange={(e) => setSectionId(e.target.value)}
+                  className="z-input"
+                >
+                  <option value="">No subgroup</option>
+                  {sections.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.displayName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             {fields.includes('quantity') && (
               <input
                 value={qty}
