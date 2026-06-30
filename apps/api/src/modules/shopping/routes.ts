@@ -61,10 +61,21 @@ const updateItemSchema = z.object({
   notes: z.string().max(2000).nullable().optional(),
   url: urlSchema.nullable().optional(),
   customValue: z.string().max(500).nullable().optional(),
+  // Set the item's subgroup (section) directly. Stored authoritatively so the
+  // assignment persists across reorders and check/uncheck instead of being
+  // re-derived from row position.
+  sectionId: z.string().uuid().nullable().optional(),
 });
 
 const reorderSchema = z.object({
   itemIds: z.array(z.string().uuid()).min(1),
+  // Optional authoritative section assignments. When present, each listed
+  // item's section_id is set explicitly and the position-based derivation is
+  // skipped — this is what makes manual/auto subgroup assignments persist
+  // instead of being recomputed away on the next reorder.
+  sections: z
+    .array(z.object({ id: z.string().uuid(), sectionId: z.string().uuid().nullable() }))
+    .optional(),
 });
 
 function normalizeItemName(name: string): string {
@@ -527,6 +538,7 @@ export default async function shoppingRoutes(app: FastifyInstance) {
     if (body.category !== undefined) { sets.push(`category = $${idx++}`); values.push(body.category); }
     if (body.notes !== undefined) { sets.push(`notes = $${idx++}`); values.push(body.notes?.trim() || null); }
     if (body.customValue !== undefined) { sets.push(`custom_value = $${idx++}`); values.push(body.customValue?.trim() || null); }
+    if (body.sectionId !== undefined) { sets.push(`section_id = $${idx++}`); values.push(body.sectionId); }
 
     if (sets.length === 0) throw new BadRequestError('No fields to update');
 
@@ -557,6 +569,7 @@ export default async function shoppingRoutes(app: FastifyInstance) {
       vendor: item.vendor,
       url: item.url,
       customValue: item.custom_value,
+      sectionId: item.section_id ?? null,
       checked: item.checked,
       updatedAt: item.updated_at,
     };
@@ -651,10 +664,22 @@ export default async function shoppingRoutes(app: FastifyInstance) {
           [i, body.itemIds[i], listId],
         );
       }
-      // Re-derive section membership from the new ordering so items dragged
-      // under a different store header are reassigned, while checked items keep
-      // their store.
-      await assignSectionIds(client, listId);
+      if (body.sections) {
+        // Authoritative section assignment from the client — set each item's
+        // section explicitly and trust it (works for checked items too), so the
+        // grouping the user arranged is exactly what persists.
+        for (const s of body.sections) {
+          await client.query(
+            'UPDATE shopping_list_items SET section_id = $1 WHERE id = $2 AND list_id = $3',
+            [s.sectionId, s.id, listId],
+          );
+        }
+      } else {
+        // Legacy path: derive section membership from the new ordering so items
+        // dragged under a different store header are reassigned, while checked
+        // items keep their store.
+        await assignSectionIds(client, listId);
+      }
       await client.query('COMMIT');
     } catch (e) {
       await client.query('ROLLBACK');

@@ -34,6 +34,17 @@ function normalizeProductUrl(raw: string): string {
   return `https://${raw}`;
 }
 
+// Extract a comparable hostname from a possibly-bare URL, dropping a leading
+// www. so "www.amazon.com" and "amazon.com" group together. Returns null when
+// the value can't be parsed as a URL.
+function urlHostname(raw: string): string | null {
+  try {
+    return new URL(normalizeProductUrl(raw)).hostname.replace(/^www\./i, '');
+  } catch {
+    return null;
+  }
+}
+
 interface ListItem {
   id: string;
   displayName: string;
@@ -292,7 +303,14 @@ export default function ListDetailPage() {
     try {
       await api(`/shopping/lists/${listId}/reorder`, {
         method: 'POST',
-        body: { itemIds: next.map((it) => it.id) },
+        body: {
+          itemIds: next.map((it) => it.id),
+          // Send the section each item landed in so the server stores it
+          // authoritatively instead of re-deriving (and possibly scrambling) it.
+          sections: next
+            .filter((it) => !it.isSection)
+            .map((it) => ({ id: it.id, sectionId: it.sectionId ?? null })),
+        },
       });
     } catch {
       loadItems();
@@ -309,42 +327,109 @@ export default function ListDetailPage() {
     const id = editingItem.id;
     setEditingItem(null);
 
-    // Separate a subgroup (section) change from plain field edits: field edits
-    // go through PATCH, while moving an item to another subgroup is persisted as
-    // a reorder so the server's position-based section derivation agrees and the
-    // assignment sticks (instead of being recomputed away on the next drag).
+    // A subgroup (section) change is persisted authoritatively: the PATCH stores
+    // section_id directly, and a follow-up reorder with explicit section
+    // assignments fixes the item's position inside its new subgroup. Nothing is
+    // re-derived from position, so the assignment sticks across refreshes.
     const hasSection = Object.prototype.hasOwnProperty.call(patch, 'sectionId');
-    const newSectionId = hasSection ? (patch.sectionId ?? null) : undefined;
-    const sectionChanged = hasSection && newSectionId !== (editingItem.sectionId ?? null);
-    const fieldPatch: Record<string, unknown> = { ...patch };
-    delete fieldPatch.sectionId;
+    const sectionChanged =
+      hasSection && (patch.sectionId ?? null) !== (editingItem.sectionId ?? null);
 
     // Optimistic local state. Merge field edits, then (if the subgroup changed)
     // drop the item at the bottom of the target subgroup and regroup.
-    let next = items.map((it) =>
-      it.id === id
-        ? { ...it, ...fieldPatch, ...(hasSection ? { sectionId: newSectionId } : {}) }
-        : it,
-    );
-    let reordered: ListItem[] | null = null;
+    let next = items.map((it) => (it.id === id ? { ...it, ...patch } : it));
     if (sectionChanged) {
       const moving = next.find((it) => it.id === id)!;
       const rest = next.filter((it) => it.id !== id);
-      reordered = buildGroupedLayout([...rest, moving]);
-      next = reordered;
+      next = buildGroupedLayout([...rest, moving]);
     }
     setItems(next);
 
     try {
-      if (Object.keys(fieldPatch).length > 0) {
-        await api(`/shopping/items/${id}`, { method: 'PATCH', body: fieldPatch });
-      }
-      if (reordered) {
+      await api(`/shopping/items/${id}`, { method: 'PATCH', body: patch });
+      if (sectionChanged) {
         await api(`/shopping/lists/${listId}/reorder`, {
           method: 'POST',
-          body: { itemIds: reordered.map((it) => it.id) },
+          body: {
+            itemIds: next.map((it) => it.id),
+            sections: next
+              .filter((it) => !it.isSection)
+              .map((it) => ({ id: it.id, sectionId: it.sectionId ?? null })),
+          },
         });
       }
+    } catch {
+      loadItems();
+    }
+  }
+
+  // Group every item that has a product link into a subgroup named after its
+  // site (e.g. "amazon.com"), creating section headers as needed. Items without
+  // a link keep their current subgroup. The whole arrangement is persisted with
+  // explicit, authoritative section assignments so it survives a refresh.
+  async function autoSortByUrl() {
+    const withUrl = items.filter((it) => !it.isSection && it.url && urlHostname(it.url));
+    if (withUrl.length === 0) {
+      alert('No items have a product link to sort by. Add a URL to an item first.');
+      return;
+    }
+    if (!confirm(`Sort ${withUrl.length} item(s) into subgroups by website?`)) return;
+
+    // Distinct hostnames, and each url item's hostname.
+    const hostOf = new Map<string, string>();
+    const hosts: string[] = [];
+    for (const it of withUrl) {
+      const h = urlHostname(it.url!)!;
+      hostOf.set(it.id, h);
+      if (!hosts.includes(h)) hosts.push(h);
+    }
+    hosts.sort((a, b) => a.localeCompare(b));
+
+    // Reuse an existing section whose title matches the host (case-insensitive),
+    // otherwise create one.
+    const sectionByName = new Map<string, ListItem>();
+    for (const sec of items.filter((it) => it.isSection)) {
+      sectionByName.set(sec.displayName.trim().toLowerCase(), sec);
+    }
+    const newSections: ListItem[] = [];
+    const hostSectionId = new Map<string, string>();
+    for (const h of hosts) {
+      const existing = sectionByName.get(h.toLowerCase());
+      if (existing) {
+        hostSectionId.set(h, existing.id);
+        continue;
+      }
+      const sec = await api<ListItem | null>(`/shopping/lists/${listId}/items`, {
+        method: 'POST',
+        body: { displayName: h, isSection: true },
+      });
+      if (sec) {
+        hostSectionId.set(h, sec.id);
+        newSections.push(sec);
+      }
+    }
+
+    // Apply section assignment to the url items; leave the rest untouched.
+    const universe = [...items, ...newSections];
+    const assigned = universe.map((it) => {
+      if (it.isSection) return it;
+      const h = hostOf.get(it.id);
+      if (h && hostSectionId.has(h)) return { ...it, sectionId: hostSectionId.get(h)! };
+      return it;
+    });
+    const layout = buildGroupedLayout(assigned);
+    setItems(layout);
+
+    try {
+      await api(`/shopping/lists/${listId}/reorder`, {
+        method: 'POST',
+        body: {
+          itemIds: layout.map((it) => it.id),
+          sections: layout
+            .filter((it) => !it.isSection)
+            .map((it) => ({ id: it.id, sectionId: it.sectionId ?? null })),
+        },
+      });
     } catch {
       loadItems();
     }
@@ -495,6 +580,21 @@ export default function ListDetailPage() {
                 </svg>
                 Add section
               </button>
+              {(list?.enabledFields ?? []).includes('url') && (
+                <button
+                  type="button"
+                  onClick={autoSortByUrl}
+                  className="text-xs px-2.5 py-1.5 rounded-lg flex items-center gap-1.5"
+                  style={{ border: '1px solid var(--ink-border)', background: 'var(--ink-surface)', color: 'var(--ink-text-muted)' }}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="10" y1="13" x2="14" y2="11"/>
+                    <path d="M8.5 8.5l-2.3 2.3a3 3 0 0 0 0 4.2l2.8 2.8a3 3 0 0 0 4.2 0l2.3-2.3"/>
+                    <path d="M15.5 15.5l2.3-2.3a3 3 0 0 0 0-4.2l-2.8-2.8a3 3 0 0 0-4.2 0L8.5 8.5"/>
+                  </svg>
+                  Sort by site
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setShowImageImport(true)}
