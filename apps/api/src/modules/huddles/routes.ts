@@ -1144,6 +1144,7 @@ export default async function huddleRoutes(app: FastifyInstance) {
   });
 
   // ── Topics ─────────────────────────────────────────────────────────────
+  app.post('/huddles/:id/topics', { preHandler: [app.authenticate] }, async (request, reply) => {
     const userId = request.user.sub;
     const { id } = request.params as { id: string };
     const body = createTopicSchema.parse(request.body);
