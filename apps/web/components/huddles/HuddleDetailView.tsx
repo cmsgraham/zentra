@@ -518,10 +518,11 @@ function TeamBoard({
         accent="var(--ink-in-progress)"
         addPlaceholder="A concrete next step"
         onAdd={async (text, due) => {
-          await api(`/huddles/${huddle.id}/intentions`, { method: 'POST', body: { text, softDueText: due || null } });
+          await api(`/huddles/${huddle.id}/intentions`, { method: 'POST', body: { text, dueDate: due || null } });
           onChange();
         }}
-        secondaryPlaceholder="When? (e.g. by Friday)"
+        secondaryPlaceholder="Due date"
+        secondaryType="date"
       >
         {huddle.intentions.length === 0 ? <Empty text="No intentions yet" /> :
           huddle.intentions.map((i) => (
@@ -664,9 +665,10 @@ function PersonalBoard({
         </div>
         <QuickAdd
           placeholder="A concrete next step"
-          secondaryPlaceholder="When? (e.g. this week)"
+          secondaryPlaceholder="Due date"
+          secondaryType="date"
           onAdd={async (text, due) => {
-            await api(`/huddles/${huddle.id}/intentions`, { method: 'POST', body: { text, softDueText: due || null } });
+            await api(`/huddles/${huddle.id}/intentions`, { method: 'POST', body: { text, dueDate: due || null } });
             onChange();
           }}
         />
@@ -742,7 +744,8 @@ function PersonalSection({
 // ── Generic Column (team board) ───────────────────────────────────────────
 
 function Column({
-  label, hint, accent, children, onAdd, addPlaceholder, secondaryPlaceholder, readonly,
+  label, hint, accent, children, onAdd, addPlaceholder,
+  secondaryPlaceholder, secondaryType = 'text', readonly,
 }: {
   label: string;
   hint?: string;
@@ -751,6 +754,7 @@ function Column({
   onAdd?: (primary: string, secondary?: string) => Promise<void> | void;
   addPlaceholder?: string;
   secondaryPlaceholder?: string;
+  secondaryType?: 'text' | 'date';
   readonly?: boolean;
 }) {
   return (
@@ -769,7 +773,12 @@ function Column({
         {hint && <span className="text-[11px]" style={{ color: 'var(--ink-text-muted)' }}>{hint}</span>}
       </header>
       {!readonly && onAdd && (
-        <QuickAdd placeholder={addPlaceholder ?? 'Add'} secondaryPlaceholder={secondaryPlaceholder} onAdd={onAdd} />
+        <QuickAdd
+          placeholder={addPlaceholder ?? 'Add'}
+          secondaryPlaceholder={secondaryPlaceholder}
+          secondaryType={secondaryType}
+          onAdd={onAdd}
+        />
       )}
       <div className="mt-3 space-y-2 flex-1">
         {children}
@@ -781,10 +790,13 @@ function Column({
 // ── Quick add (one or two fields) ─────────────────────────────────────────
 
 function QuickAdd({
-  placeholder, secondaryPlaceholder, onAdd,
+  placeholder, secondaryPlaceholder, secondaryType = 'text', onAdd,
 }: {
   placeholder: string;
   secondaryPlaceholder?: string;
+  // 'date' gives a real date input, needed wherever the value has to survive
+  // conversion into a task's due_date.
+  secondaryType?: 'text' | 'date';
   onAdd: (primary: string, secondary?: string) => Promise<void> | void;
 }) {
   const [open, setOpen] = useState(false);
@@ -827,8 +839,9 @@ function QuickAdd({
       />
       {secondaryPlaceholder && (
         <input
-          value={b} onChange={(e) => setB(e.target.value)}
+          type={secondaryType} value={b} onChange={(e) => setB(e.target.value)}
           placeholder={secondaryPlaceholder}
+          aria-label={secondaryPlaceholder}
           className="w-full px-2 py-1 text-[12px] bg-transparent outline-none"
           style={{ color: 'var(--ink-text-secondary)' }}
         />
@@ -992,6 +1005,9 @@ function TopicCard({
   const [busy, setBusy] = useState(false);
   const [subOpen, setSubOpen] = useState(false);
   const [subTitle, setSubTitle] = useState('');
+  const [actionOpen, setActionOpen] = useState(false);
+  const [actionText, setActionText] = useState('');
+  const [actionDue, setActionDue] = useState('');
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(topic.title);
   const [context, setContext] = useState(topic.context ?? '');
@@ -1225,6 +1241,12 @@ function TopicCard({
             style={{ color: 'var(--ink-text-muted)' }}>
             Not relevant
           </button>
+          <button onClick={() => setActionOpen((v) => !v)} disabled={busy}
+            title="A next step coming out of this topic — lands in Next intentions"
+            className="text-[11.5px] px-2 py-0.5 rounded-md"
+            style={{ color: 'var(--ink-text-muted)' }}>
+            + Action
+          </button>
           {!topic.parentTopicId && (
             <button onClick={() => setSubOpen((v) => !v)} disabled={busy}
               title="This discussion revealed something that's now its own topic"
@@ -1234,6 +1256,55 @@ function TopicCard({
             </button>
           )}
         </div>
+      )}
+
+      {actionOpen && (
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            if (!actionText.trim() || busy) return;
+            setBusy(true);
+            try {
+              await api(`/huddles/${huddleId}/intentions`, {
+                method: 'POST',
+                body: {
+                  text: actionText.trim(),
+                  dueDate: actionDue || null,
+                  topicId: topic.id,
+                },
+              });
+              setActionText(''); setActionDue(''); setActionOpen(false);
+              onChange();
+            } finally { setBusy(false); }
+          }}
+          className="mt-2 rounded-md p-1.5"
+          style={{ background: 'var(--ink-surface)', border: '1px solid var(--ink-accent)' }}
+        >
+          <input
+            autoFocus value={actionText} onChange={(e) => setActionText(e.target.value)}
+            placeholder="A concrete next step"
+            className="w-full px-1.5 py-1 text-[12.5px] bg-transparent outline-none"
+            style={{ color: 'var(--ink-text)' }}
+            onKeyDown={(e) => { if (e.key === 'Escape') { setActionOpen(false); setActionText(''); } }}
+          />
+          <input
+            type="date" value={actionDue} onChange={(e) => setActionDue(e.target.value)}
+            aria-label="Due date"
+            className="w-full px-1.5 py-1 text-[11.5px] bg-transparent outline-none"
+            style={{ color: 'var(--ink-text-secondary)' }}
+          />
+          <div className="flex items-center gap-1.5 mt-1">
+            <button type="submit" disabled={!actionText.trim() || busy}
+              className="text-[11px] px-2 py-0.5 rounded-md"
+              style={{ background: 'var(--ink-accent)', color: 'var(--ink-on-accent)', fontWeight: 600, opacity: !actionText.trim() ? 0.5 : 1 }}>
+              Add
+            </button>
+            <button type="button" onClick={() => { setActionOpen(false); setActionText(''); setActionDue(''); }}
+              className="text-[11px]" style={{ color: 'var(--ink-text-muted)' }}>
+              Cancel
+            </button>
+          </div>
+        </form>
       )}
 
       {subOpen && (
@@ -1561,9 +1632,14 @@ function IntentionCard({
   const [priority, setPriority] = useState(false);
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(intention.text);
-  const [due, setDue] = useState(intention.softDueText ?? '');
+  const [due, setDue] = useState(intention.dueDate ?? '');
   const [details, setDetails] = useState(intention.details ?? '');
-  const done = intention.status === 'done';
+  const done = intention.status === 'done' || intention.linkedTaskStatus === 'done';
+  const dueLabel = intention.dueDate
+    ? new Date(`${intention.dueDate}T00:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' })
+    : intention.softDueText;
+  const overdue = !done && !!intention.dueDate
+    && intention.dueDate < new Date().toISOString().slice(0, 10);
 
   async function complete() {
     setBusy(true);
@@ -1595,7 +1671,7 @@ function IntentionCard({
         method: 'PUT',
         body: {
           text: text.trim(),
-          softDueText: due.trim() ? due.trim() : null,
+          dueDate: due || null,
           details: details.trim() ? details.trim() : null,
         },
       });
@@ -1605,7 +1681,7 @@ function IntentionCard({
   }
   function cancelEdit() {
     setText(intention.text);
-    setDue(intention.softDueText ?? '');
+    setDue(intention.dueDate ?? '');
     setDetails(intention.details ?? '');
     setEditing(false);
   }
@@ -1620,9 +1696,11 @@ function IntentionCard({
           style={{ background: 'var(--ink-surface)', color: 'var(--ink-text)', border: '1px solid var(--ink-border)', outline: 'none' }}
           onKeyDown={(e) => { if (e.key === 'Escape') cancelEdit(); }}
         />
+        {/* Real date, so it can be carried onto the task on conversion —
+            freeform text could never map to tasks.due_date. */}
         <input
-          value={due} onChange={(e) => setDue(e.target.value)}
-          placeholder="When? (e.g. by Friday)"
+          type="date" value={due} onChange={(e) => setDue(e.target.value)}
+          aria-label="Due date"
           className="w-full mt-1 px-2 py-1 text-[12px] rounded-md"
           style={{ background: 'var(--ink-surface)', color: 'var(--ink-text-secondary)', border: '1px solid var(--ink-border)', outline: 'none' }}
         />
@@ -1677,9 +1755,17 @@ function IntentionCard({
           </p>
           <div className="flex items-center gap-2 mt-1 text-[11px]" style={{ color: 'var(--ink-text-muted)' }}>
             {intention.ownerName && <span>{intention.ownerName}</span>}
-            {intention.softDueText && <span>· {intention.softDueText}</span>}
+            {dueLabel && (
+              <span style={{ color: overdue ? 'var(--ink-blocked)' : 'inherit', fontWeight: overdue ? 600 : 400 }}>
+                · {dueLabel}{overdue ? ' · overdue' : ''}
+              </span>
+            )}
+            {/* A reference to the tracked task, showing its live state rather
+                than a static "created" label that can go stale. */}
             {intention.linkedTaskId && (
-              <span style={{ color: 'var(--ink-accent)' }}>· task created</span>
+              <span style={{ color: 'var(--ink-accent)' }}>
+                · task{intention.linkedTaskStatus ? ` (${intention.linkedTaskStatus.replace('_', ' ')})` : ''}
+              </span>
             )}
           </div>
           {intention.details && <DetailsBlock text={intention.details} />}

@@ -101,8 +101,14 @@ export interface HuddleIntention {
   text: string;
   ownerUserId: string;
   softDueText: string | null;
+  dueDate: string | null;
+  topicId: string | null;
   details: string | null;
   linkedTaskId: string | null;
+  // Live state of the linked task — the huddle references it rather than
+  // holding a second copy that can drift.
+  linkedTaskStatus: string | null;
+  linkedTaskDueDate: string | null;
   status: HuddleIntentionStatus;
   sortOrder: number;
   createdAt: string;

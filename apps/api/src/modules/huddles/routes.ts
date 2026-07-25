@@ -121,10 +121,14 @@ const decideTopicSchema = z.object({
   details: detailsField,
 });
 
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
 const createIntentionSchema = z.object({
   text: z.string().min(1).max(500),
   ownerUserId: z.string().uuid().optional(), // defaults to current user
   softDueText: z.string().max(120).optional().nullable(),
+  dueDate: isoDate.nullable().optional(),
+  topicId: z.string().uuid().nullable().optional(),
   details: detailsField,
 });
 
@@ -132,6 +136,8 @@ const updateIntentionSchema = z.object({
   text: z.string().min(1).max(500).optional(),
   ownerUserId: z.string().uuid().optional(),
   softDueText: z.string().max(120).nullable().optional(),
+  dueDate: isoDate.nullable().optional(),
+  topicId: z.string().uuid().nullable().optional(),
   status: z.enum(['open', 'done', 'cancelled']).optional(),
   details: detailsField,
 });
@@ -255,8 +261,14 @@ function formatIntention(r: any) {
     text: r.text,
     ownerUserId: r.owner_user_id,
     softDueText: r.soft_due_text,
+    dueDate: r.due_date ?? null,
+    topicId: r.topic_id ?? null,
     details: r.details ?? null,
     linkedTaskId: r.linked_task_id,
+    // Live state of the linked task, so the huddle shows a reference rather
+    // than a second copy of the truth that can drift.
+    linkedTaskStatus: r.linked_task_status ?? null,
+    linkedTaskDueDate: r.linked_task_due_date ?? null,
     status: r.status,
     sortOrder: r.sort_order ?? 0,
     createdAt: r.created_at,
@@ -894,9 +906,11 @@ export default async function huddleRoutes(app: FastifyInstance) {
         [id],
       ),
       app.pg.query(
-        `SELECT i.*, u.name AS owner_name
+        `SELECT i.*, u.name AS owner_name,
+                tk.status AS linked_task_status, tk.due_date AS linked_task_due_date
          FROM huddle_intentions i
          LEFT JOIN users u ON u.id = i.owner_user_id
+         LEFT JOIN tasks tk ON tk.id = i.linked_task_id
          WHERE i.huddle_id = $1
          ORDER BY i.sort_order ASC, i.created_at ASC`,
         [id],
@@ -1636,9 +1650,14 @@ export default async function huddleRoutes(app: FastifyInstance) {
       `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM huddle_intentions WHERE huddle_id = $1`, [id],
     );
     const r = await app.pg.query(
-      `INSERT INTO huddle_intentions (huddle_id, text, owner_user_id, soft_due_text, details, sort_order)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [id, body.text, body.ownerUserId ?? userId, body.softDueText ?? null, body.details ?? null, orderRes.rows[0].next],
+      `INSERT INTO huddle_intentions
+         (huddle_id, text, owner_user_id, soft_due_text, due_date, topic_id, details, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [
+        id, body.text, body.ownerUserId ?? userId, body.softDueText ?? null,
+        body.dueDate ?? null, body.topicId ?? null,
+        body.details ?? null, orderRes.rows[0].next,
+      ],
     );
     return reply.status(201).send({ intention: formatIntention(r.rows[0]) });
   });
@@ -1678,6 +1697,8 @@ export default async function huddleRoutes(app: FastifyInstance) {
     if (body.text !== undefined) { sets.push(`text = $${i++}`); params.push(body.text); }
     if (body.ownerUserId !== undefined) { sets.push(`owner_user_id = $${i++}`); params.push(body.ownerUserId); }
     if (body.softDueText !== undefined) { sets.push(`soft_due_text = $${i++}`); params.push(body.softDueText); }
+    if (body.dueDate !== undefined) { sets.push(`due_date = $${i++}`); params.push(body.dueDate); }
+    if (body.topicId !== undefined) { sets.push(`topic_id = $${i++}`); params.push(body.topicId); }
     if (body.details !== undefined) { sets.push(`details = $${i++}`); params.push(body.details); }
     if (body.status !== undefined) { sets.push(`status = $${i++}`); params.push(body.status); }
     if (sets.length === 0) {
@@ -1734,13 +1755,21 @@ export default async function huddleRoutes(app: FastifyInstance) {
     }
 
     const today = new Date().toISOString().slice(0, 10);
+    // creator_id is NOT NULL and was previously omitted, so every conversion
+    // failed with a not-null violation. Owner and due date now carry across too,
+    // so the task tracker holds the real state and the huddle just references it.
     const taskRes = await app.pg.query(
-      `INSERT INTO tasks (workspace_id, title, status, priority, next_action, next_action_state${body.priorityForToday ? ', priority_for_date, priority_for_user_id' : ''})
-       VALUES ($1, $2, 'pending', 'medium', $3, 'set'${body.priorityForToday ? ', $4, $5' : ''})
+      `INSERT INTO tasks
+         (workspace_id, title, status, priority, next_action, next_action_state,
+          creator_id, assignee_id, due_date${body.priorityForToday ? ', priority_for_date, priority_for_user_id' : ''})
+       VALUES ($1, $2, 'pending', 'medium', $3, 'set',
+               $4, $5, $6${body.priorityForToday ? ', $7, $8' : ''})
        RETURNING id`,
       body.priorityForToday
-        ? [body.workspaceId, intent.text, intent.text, today, intent.owner_user_id]
-        : [body.workspaceId, intent.text, intent.text],
+        ? [body.workspaceId, intent.text, intent.text, userId, intent.owner_user_id,
+           intent.due_date ?? null, today, intent.owner_user_id]
+        : [body.workspaceId, intent.text, intent.text, userId, intent.owner_user_id,
+           intent.due_date ?? null],
     );
     const taskId = taskRes.rows[0].id;
     const updated = await app.pg.query(
@@ -1802,6 +1831,188 @@ export default async function huddleRoutes(app: FastifyInstance) {
       [id, userId, body.text],
     );
     return reply.status(201).send({ note: formatNote(r.rows[0]) });
+  });
+
+  // ── Series report for a template ────────────────────────────────────────
+  // A template is the identity of a recurring meeting, so this reports on the
+  // series rather than any single huddle. Only captures huddles created after
+  // huddles.template_id shipped (052) — earlier ones can't be back-linked.
+  app.get('/huddles/templates/:tid/report', { preHandler: [app.authenticate] }, async (request) => {
+    const userId = request.user.sub;
+    const { tid } = request.params as { tid: string };
+
+    const tr = await app.pg.query(
+      `SELECT * FROM huddle_templates WHERE id = $1 AND owner_user_id = $2`,
+      [tid, userId],
+    );
+    if (tr.rows.length === 0) throw new NotFoundError('Template not found');
+    const tpl = tr.rows[0];
+
+    const huddlesRes = await app.pg.query(
+      `SELECT id, title, status, scheduled_at, started_at, ended_at, created_at
+         FROM huddles WHERE template_id = $1
+        ORDER BY COALESCE(ended_at, scheduled_at, created_at) ASC`,
+      [tid],
+    );
+    const huddleIds = huddlesRes.rows.map((h: any) => h.id);
+
+    if (huddleIds.length === 0) {
+      return {
+        template: { id: tpl.id, name: tpl.name, type: tpl.type },
+        huddles: [], openTopics: [], escalations: [], longTerm: [],
+        decisions: [], actionItems: [],
+        stats: { huddleCount: 0, opened: 0, closed: 0, cancelled: 0, medianDaysToClose: null },
+      };
+    }
+
+    // Age of a topic = time since it was FIRST raised, which means walking the
+    // carry-forward chain back to its origin rather than using created_at on
+    // the current row (that only says when it was last copied).
+    const [topicsRes, decisionsRes, actionsRes, closedRes] = await Promise.all([
+      app.pg.query(
+        `WITH RECURSIVE chain AS (
+           SELECT t.id AS topic_id, t.carried_from_topic_id AS prev, t.created_at
+             FROM huddle_topics t WHERE t.huddle_id = ANY($1::uuid[])
+           UNION ALL
+           SELECT c.topic_id, p.carried_from_topic_id, p.created_at
+             FROM chain c JOIN huddle_topics p ON p.id = c.prev
+         ), origin AS (
+           SELECT topic_id, MIN(created_at) AS first_raised FROM chain GROUP BY topic_id
+         )
+         SELECT t.id, t.title, t.status, t.open_reason, t.horizon, t.defer_count,
+                t.huddle_id, h.title AS huddle_title, o.first_raised,
+                uo.name AS owner_name, ua.name AS approver_name,
+                EXTRACT(DAY FROM (now() - o.first_raised))::int AS age_days,
+                EXISTS (SELECT 1 FROM huddle_topics c
+                         WHERE c.parent_topic_id = t.id AND c.status = 'open') AS has_open_child,
+                -- A topic that something later carried forward from is a
+                -- historical copy. Its own huddle still shows it as open (that
+                -- was true at the time), but the series view wants only the
+                -- live head of each chain, or the same topic appears once per
+                -- meeting it survived.
+                EXISTS (SELECT 1 FROM huddle_topics n
+                         WHERE n.carried_from_topic_id = t.id) AS superseded
+           FROM huddle_topics t
+           JOIN huddles h ON h.id = t.huddle_id
+           JOIN origin o ON o.topic_id = t.id
+           LEFT JOIN users uo ON uo.id = t.owner_user_id
+           LEFT JOIN users ua ON ua.id = t.approver_user_id
+          WHERE t.huddle_id = ANY($1::uuid[])`,
+        [huddleIds],
+      ),
+      app.pg.query(
+        `SELECT d.decision_text, d.created_at, t.title AS topic_title,
+                h.title AS huddle_title, u.name AS owner_name
+           FROM huddle_decisions d
+           JOIN huddle_topics t ON t.id = d.huddle_topic_id
+           JOIN huddles h ON h.id = t.huddle_id
+           LEFT JOIN users u ON u.id = d.owner_user_id
+          WHERE t.huddle_id = ANY($1::uuid[])
+          ORDER BY d.created_at ASC`,
+        [huddleIds],
+      ),
+      // Follow-through: the huddle only references the task, so the tracker is
+      // the source of truth for whether the work actually happened.
+      app.pg.query(
+        `SELECT i.text, i.status AS intention_status, i.linked_task_id,
+                i.due_date, i.soft_due_text,
+                tk.status AS task_status, tk.due_date AS task_due_date,
+                tk.completed_at, u.name AS owner_name, h.title AS huddle_title
+           FROM huddle_intentions i
+           JOIN huddles h ON h.id = i.huddle_id
+           LEFT JOIN tasks tk ON tk.id = i.linked_task_id
+           LEFT JOIN users u ON u.id = i.owner_user_id
+          WHERE i.huddle_id = ANY($1::uuid[])
+          ORDER BY i.created_at ASC`,
+        [huddleIds],
+      ),
+      app.pg.query(
+        `SELECT percentile_cont(0.5) WITHIN GROUP (
+                  ORDER BY EXTRACT(EPOCH FROM (closed_at - created_at)) / 86400.0
+                ) AS median_days
+           FROM huddle_topics
+          WHERE huddle_id = ANY($1::uuid[]) AND closed_at IS NOT NULL`,
+        [huddleIds],
+      ),
+    ]);
+
+    const topics = topicsRes.rows;
+    // Live = still open and not already carried into a later huddle.
+    const open = topics.filter((t: any) => t.status === 'open' && !t.superseded);
+
+    const shape = (t: any) => ({
+      id: t.id, title: t.title, status: t.status,
+      openReason: t.open_reason, horizon: t.horizon,
+      deferCount: t.defer_count ?? 0, ageDays: t.age_days ?? 0,
+      ownerName: t.owner_name ?? null, approverName: t.approver_name ?? null,
+      huddleId: t.huddle_id, huddleTitle: t.huddle_title,
+    });
+
+    const today = new Date().toISOString().slice(0, 10);
+    const actionItems = actionsRes.rows.map((a: any) => {
+      const due = a.task_due_date ?? a.due_date ?? null;
+      const dueStr = due ? new Date(due).toISOString().slice(0, 10) : null;
+      const done = a.task_status === 'done' || a.intention_status === 'done';
+      return {
+        text: a.text,
+        ownerName: a.owner_name ?? null,
+        huddleTitle: a.huddle_title,
+        converted: !!a.linked_task_id,
+        taskStatus: a.task_status ?? null,
+        dueDate: dueStr,
+        softDueText: a.soft_due_text ?? null,
+        done,
+        overdue: !done && !!dueStr && dueStr < today,
+      };
+    });
+
+    return {
+      template: { id: tpl.id, name: tpl.name, type: tpl.type },
+      huddles: huddlesRes.rows.map((h: any) => ({
+        id: h.id, title: h.title, status: h.status,
+        endedAt: h.ended_at, scheduledAt: h.scheduled_at, createdAt: h.created_at,
+        // Per-huddle throughput, so an opened-faster-than-closed trend is visible.
+        opened: topics.filter((t: any) => t.huddle_id === h.id).length,
+        closed: topics.filter((t: any) => t.huddle_id === h.id && t.status === 'closed').length,
+        cancelled: topics.filter((t: any) => t.huddle_id === h.id && t.status === 'cancelled').length,
+      })),
+      // Aging is the leading indicator — what's at risk now, not what already finished.
+      openTopics: open
+        .filter((t: any) => t.horizon === 'short_term')
+        .sort((a: any, b: any) => (b.age_days ?? 0) - (a.age_days ?? 0))
+        .map(shape),
+      // Needs an exit: round the loop 3+ times with nothing in flight beneath it.
+      escalations: open
+        .filter((t: any) => t.horizon === 'short_term'
+          && (t.defer_count ?? 0) >= 3 && !t.has_open_child)
+        .map(shape),
+      // Parked out of the weekly rotation — otherwise only reachable via its own huddle.
+      longTerm: open.filter((t: any) => t.horizon === 'long_term').map(shape),
+      decisions: decisionsRes.rows.map((d: any) => ({
+        decisionText: d.decision_text,
+        topicTitle: d.topic_title,
+        huddleTitle: d.huddle_title,
+        ownerName: d.owner_name ?? null,
+        createdAt: d.created_at,
+      })),
+      actionItems,
+      stats: {
+        huddleCount: huddlesRes.rows.length,
+        opened: topics.length,
+        closed: topics.filter((t: any) => t.status === 'closed').length,
+        cancelled: topics.filter((t: any) => t.status === 'cancelled').length,
+        stillOpen: open.length,
+        needsDecisionNoApprover: open.filter(
+          (t: any) => t.open_reason === 'needs_decision' && !t.approver_name).length,
+        medianDaysToClose: closedRes.rows[0]?.median_days != null
+          ? Math.round(Number(closedRes.rows[0].median_days) * 10) / 10
+          : null,
+        actionsTotal: actionItems.length,
+        actionsConverted: actionItems.filter((a) => a.converted).length,
+        actionsDone: actionItems.filter((a) => a.done).length,
+        actionsOverdue: actionItems.filter((a) => a.overdue).length,
+      },
+    };
   });
 
   // ── Workspace members helper (for invite picker) ───────────────────────

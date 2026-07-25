@@ -89,7 +89,11 @@ export interface HuddleIntention {
   text: string;
   ownerUserId: string;
   softDueText: string | null;
+  dueDate?: string | null;
+  topicId?: string | null;
   linkedTaskId: string | null;
+  linkedTaskStatus?: string | null;
+  linkedTaskDueDate?: string | null;
   status: HuddleIntentionStatus;
   sortOrder: number;
   createdAt: string;

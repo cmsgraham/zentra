@@ -313,6 +313,19 @@ function TemplateCard({
           >
             Start huddle
           </button>
+          <Link
+            href={`/huddles/templates/${template.id}/report`}
+            title="How this recurring meeting is actually doing"
+            className="px-3 py-1.5 rounded-full text-[12.5px]"
+            style={{
+              background: 'var(--ink-surface-raised)',
+              color: 'var(--ink-text)',
+              border: '1px solid var(--ink-border-subtle)',
+              fontWeight: 550,
+            }}
+          >
+            Report
+          </Link>
           <button
             onClick={onEdit}
             className="px-3 py-1.5 rounded-full text-[12.5px]"
