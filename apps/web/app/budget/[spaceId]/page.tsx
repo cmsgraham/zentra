@@ -23,8 +23,11 @@ interface PeriodDetail extends BudgetPeriod {
   summary?: {
     plannedCount: number;
     unplannedCount: number;
+    incomeCount?: number;
     unpaidCount: number;
     totalAmount: number;
+    incomeTotal?: number;
+    netTotal?: number;
   };
 }
 
@@ -93,6 +96,28 @@ interface Friend {
 function amountText(amount: number): string {
   // Format with thousands separator and no decimals
   return Math.round(amount).toLocaleString('en-US');
+}
+
+const MONTH_NAMES_FULL = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+// Human-friendly period title, e.g. "July 2026 · Quincena 1" (semi-monthly),
+// "July 2026" (monthly), or the stored label for no-cadence spaces.
+function periodDisplay(
+  period: { year?: number; month?: number; periodIndex?: number | null; label?: string } | null | undefined,
+  cadence: BudgetCadence,
+): string {
+  if (!period) return 'Current period';
+  if (cadence === 'none') return period.label ?? 'Future purchases';
+  const monthName =
+    period.month && period.month >= 1 && period.month <= 12 ? MONTH_NAMES_FULL[period.month - 1] : '';
+  const base = monthName ? `${monthName}${period.year ? ` ${period.year}` : ''}` : period.label ?? '';
+  if (cadence === 'semi_monthly' && period.periodIndex) {
+    return `${base} · Quincena ${period.periodIndex}`;
+  }
+  return base || period.label || 'Current period';
 }
 
 function emptyItemForm(): ItemFormState {
@@ -221,6 +246,7 @@ export default function BudgetSpacePage() {
 
   const [showAddPlanned, setShowAddPlanned] = useState(false);
   const [showAddUnplanned, setShowAddUnplanned] = useState(false);
+  const [showAddIncome, setShowAddIncome] = useState(false);
   const [showLibraryPicker, setShowLibraryPicker] = useState(false);
   const [showLibraryManager, setShowLibraryManager] = useState(false);
   const [showPeriods, setShowPeriods] = useState(false);
@@ -228,6 +254,7 @@ export default function BudgetSpacePage() {
 
   const [plannedForm, setPlannedForm] = useState<ItemFormState>(emptyItemForm());
   const [unplannedForm, setUnplannedForm] = useState<ItemFormState>(emptyItemForm());
+  const [incomeForm, setIncomeForm] = useState<ItemFormState>(emptyItemForm());
   const [templateForm, setTemplateForm] = useState<TemplateFormState>(emptyTemplateForm());
   const [editingTemplate, setEditingTemplate] = useState<ExpenseTemplate | null>(null);
   const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>([]);
@@ -262,8 +289,9 @@ export default function BudgetSpacePage() {
     });
   }, [paymentSort]);
 
-  const plannedItems = useMemo(() => sortPayments(items.filter((item) => item.entryType === 'planned')), [items, sortPayments]);
-  const unplannedItems = useMemo(() => sortPayments(items.filter((item) => item.entryType === 'unplanned')), [items, sortPayments]);
+  const plannedItems = useMemo(() => sortPayments(items.filter((item) => item.kind !== 'income' && item.entryType === 'planned')), [items, sortPayments]);
+  const unplannedItems = useMemo(() => sortPayments(items.filter((item) => item.kind !== 'income' && item.entryType === 'unplanned')), [items, sortPayments]);
+  const incomeItems = useMemo(() => sortPayments(items.filter((item) => item.kind === 'income')), [items, sortPayments]);
 
   // Totals in both currencies
   // Planned = all planned items, Current = only not paid
@@ -337,6 +365,36 @@ export default function BudgetSpacePage() {
       crc: plannedCurrentTotals.crc + unplannedCurrentTotals.crc,
     };
   }, [plannedCurrentTotals, unplannedCurrentTotals]);
+  // Income (all) and income still expected (not yet received).
+  const incomeTotals = useMemo(() => {
+    let usd = 0, crc = 0;
+    for (const item of incomeItems) {
+      const amt = Number(item.amount);
+      if (detectCurrency(amt) === 'USD') { usd += amt; crc += amt * exchangeRate; }
+      else { crc += amt; usd += amt / exchangeRate; }
+    }
+    return { usd, crc };
+  }, [incomeItems, exchangeRate]);
+  const incomeCurrentTotals = useMemo(() => {
+    let usd = 0, crc = 0;
+    for (const item of incomeItems) {
+      if (item.paid) continue;
+      const amt = Number(item.amount);
+      if (detectCurrency(amt) === 'USD') { usd += amt; crc += amt * exchangeRate; }
+      else { crc += amt; usd += amt / exchangeRate; }
+    }
+    return { usd, crc };
+  }, [incomeItems, exchangeRate]);
+  // Net = income − expenses. "All" uses planned amounts; "Remaining" uses only
+  // what is still unpaid/unreceived (real cash left to move this period).
+  const netTotals = useMemo(() => ({
+    usd: incomeTotals.usd - allTotals.usd,
+    crc: incomeTotals.crc - allTotals.crc,
+  }), [incomeTotals, allTotals]);
+  const netCurrentTotals = useMemo(() => ({
+    usd: incomeCurrentTotals.usd - allCurrentTotals.usd,
+    crc: incomeCurrentTotals.crc - allCurrentTotals.crc,
+  }), [incomeCurrentTotals, allCurrentTotals]);
   const activeLibrary = useMemo(() => library.filter((item) => item.active), [library]);
   const availableLibrary = useMemo(() => {
     const addedTemplateIds = new Set(items.map((item) => item.templateId).filter(Boolean));
@@ -516,6 +574,57 @@ export default function BudgetSpacePage() {
     }
   }
 
+  async function createIncome(form: ItemFormState) {
+    if (!selectedPeriodId) return;
+    if (!form.name.trim() || !form.amount.trim()) return;
+
+    setSaving(true);
+    try {
+      await api(`/budget/periods/${selectedPeriodId}/items`, {
+        method: 'POST',
+        body: {
+          name: form.name.trim(),
+          amount: Number(form.amount),
+          entryType: 'planned',
+          kind: 'income',
+          paid: false,
+          dueDay: form.dueDay ? Number(form.dueDay) : null,
+          category: form.category.trim() || null,
+        },
+      });
+      await refreshPeriodState(selectedPeriodId);
+      await loadCategories();
+      setIncomeForm(emptyItemForm());
+      setShowAddIncome(false);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function clonePreviousPeriod() {
+    if (!selectedPeriodId) return;
+    setSaving(true);
+    try {
+      const result = await api<{ created: number; skipped: number; sourceLabel: string }>(
+        `/budget/periods/${selectedPeriodId}/clone-from-previous`,
+        { method: 'POST' },
+      );
+      await refreshPeriodState(selectedPeriodId);
+      const parts: string[] = [];
+      if (result.created > 0) parts.push(`${result.created} copied`);
+      if (result.skipped > 0) parts.push(`${result.skipped} already here`);
+      window.alert(
+        parts.length
+          ? `Cloned from “${result.sourceLabel}”: ${parts.join(', ')}. All marked unpaid — adjust amounts and mark as paid.`
+          : `Nothing to clone from “${result.sourceLabel}”.`,
+      );
+    } catch (err: any) {
+      window.alert(err?.message ?? 'No previous period with items to clone from.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function closeLibraryPicker() {
     setShowLibraryPicker(false);
     setSelectedTemplateIds([]);
@@ -541,6 +650,7 @@ export default function BudgetSpacePage() {
               entryType: 'planned',
               paid: false,
               dueDay: template.dueDay,
+              category: template.category ?? null,
             },
           }),
         ),
@@ -853,9 +963,20 @@ export default function BudgetSpacePage() {
           Build Budget
         </button>
       )}
+      {!isNoCadence && (
+        <button
+          className="z-btn"
+          onClick={clonePreviousPeriod}
+          disabled={saving || !selectedPeriodId}
+          title="Copy income & expenses from the previous period (all unpaid)"
+        >
+          Clone previous period
+        </button>
+      )}
       <button className="z-btn" onClick={() => setShowLibraryPicker(true)}>Add from Expense Library</button>
       <button className="z-btn" onClick={() => setShowAddPlanned(true)}>{isNoCadence ? 'Add future purchase' : 'Add one-time planned'}</button>
       {!isNoCadence && <button className="z-btn" onClick={() => setShowAddUnplanned(true)}>Add unplanned</button>}
+      {!isNoCadence && <button className="z-btn" onClick={() => setShowAddIncome(true)}>Add income</button>}
       <button className="z-btn" onClick={() => setShowLibraryManager(true)}>Open Expense Library</button>
       {!isNoCadence && <button className="z-btn" onClick={() => setShowPeriods(true)}>Other periods</button>}
     </>
@@ -884,9 +1005,14 @@ export default function BudgetSpacePage() {
               <div className="flex flex-wrap items-start justify-between gap-2 px-4 pt-3 pb-2">
                 <div className="min-w-0">
                   <h1 className="text-base font-semibold leading-tight tracking-tight" style={{ color: 'var(--ink-text)' }}>{space.name}</h1>
-                  <p className="mt-0.5 text-xs" style={{ color: 'var(--ink-text-secondary)' }}>
-                    {isNoCadence ? 'No cadence' : periodDetail?.label ?? space.currentPeriod?.label ?? 'Current period'}
+                  <p className="mt-0.5 text-sm font-medium" style={{ color: 'var(--ink-text)' }}>
+                    {isNoCadence ? 'No cadence' : periodDisplay(periodDetail ?? space.currentPeriod, space.cadence)}
                   </p>
+                  {!isNoCadence && (periodDetail?.label ?? space.currentPeriod?.label) && (
+                    <p className="text-[11px]" style={{ color: 'var(--ink-text-muted)' }}>
+                      {periodDetail?.label ?? space.currentPeriod?.label}
+                    </p>
+                  )}
                   {periodDetail?.summary && (
                     <div className="mt-1.5 flex flex-wrap items-center gap-1">
                       <span
@@ -922,11 +1048,20 @@ export default function BudgetSpacePage() {
                     Remaining
                   </div>
 
-                  {([
-                    { label: 'Planned', all: plannedTotals, remaining: plannedCurrentTotals, emphasis: false },
-                    { label: 'Unplanned', all: unplannedTotals, remaining: unplannedCurrentTotals, emphasis: false },
-                    { label: 'Total', all: allTotals, remaining: allCurrentTotals, emphasis: true },
-                  ] as const).map((row) => (
+                  {(isNoCadence
+                    ? [
+                        { label: 'Planned', all: plannedTotals, remaining: plannedCurrentTotals, emphasis: false },
+                        { label: 'Unplanned', all: unplannedTotals, remaining: unplannedCurrentTotals, emphasis: false },
+                        { label: 'Total', all: allTotals, remaining: allCurrentTotals, emphasis: true },
+                      ]
+                    : [
+                        { label: 'Income', all: incomeTotals, remaining: incomeCurrentTotals, emphasis: false },
+                        { label: 'Planned', all: plannedTotals, remaining: plannedCurrentTotals, emphasis: false },
+                        { label: 'Unplanned', all: unplannedTotals, remaining: unplannedCurrentTotals, emphasis: false },
+                        { label: 'Expenses', all: allTotals, remaining: allCurrentTotals, emphasis: false },
+                        { label: 'Net', all: netTotals, remaining: netCurrentTotals, emphasis: true },
+                      ]
+                  ).map((row) => (
                     <FinancialRow key={row.label} label={row.label} all={row.all} remaining={row.remaining} emphasis={row.emphasis} />
                   ))}
                 </div>
@@ -1030,6 +1165,25 @@ export default function BudgetSpacePage() {
                     ))}
                   </div>
                 </div>
+
+            {!isNoCadence && (
+              <section className="mt-4 rounded-2xl border" style={{ borderColor: 'var(--ink-border-subtle)', background: 'var(--ink-surface)' }}>
+                <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--ink-border-subtle)' }}>
+                  <h2 className="text-sm font-semibold">Income</h2>
+                  <span className="text-xs tabular-nums" style={{ color: 'var(--ink-text-secondary)' }}>₡{amountText(incomeTotals.crc)}</span>
+                </div>
+                <div className="p-2">
+                  {incomeItems.length === 0 && (
+                    <p className="px-2 py-4 text-center text-sm" style={{ color: 'var(--ink-text-faint)' }}>
+                      No income yet. Use “Add income” to record what comes in.
+                    </p>
+                  )}
+                  {incomeItems.map((item) => (
+                    <ItemRow key={item.id} item={item} exchangeRate={exchangeRate} onTogglePaid={togglePaid} onEdit={startEditItem} onDelete={removeItem} selected={selectedAmountIds.has(item.id)} onToggleSelect={toggleAmountSelect} />
+                  ))}
+                </div>
+              </section>
+            )}
 
             <div className={`mt-4 grid gap-4 ${isNoCadence ? '' : 'md:grid-cols-[minmax(0,1fr)_18rem]'}`}>
               <section className="rounded-2xl border" style={{ borderColor: 'var(--ink-border-subtle)', background: 'var(--ink-surface)' }}>
@@ -1215,6 +1369,22 @@ export default function BudgetSpacePage() {
         </SimpleModal>
       )}
 
+      {showAddIncome && (
+        <SimpleModal title="Add income" onClose={() => setShowAddIncome(false)}>
+          <ItemForm
+            value={incomeForm}
+            onChange={setIncomeForm}
+            onSubmit={() => createIncome(incomeForm)}
+            submitLabel="Add income"
+            saving={saving}
+            categories={categories}
+          />
+          <p className="mt-2 text-[11px]" style={{ color: 'var(--ink-text-muted)' }}>
+            Income starts unreceived. Check it off when the money arrives.
+          </p>
+        </SimpleModal>
+      )}
+
       {showEditSpace && (
         <SimpleModal title="Edit Space" onClose={() => setShowEditSpace(false)}>
           <div className="space-y-3">
@@ -1368,9 +1538,9 @@ export default function BudgetSpacePage() {
                   setShowPeriods(false);
                 }}
               >
-                <p className="font-medium">{period.label}</p>
+                <p className="font-medium">{periodDisplay(period, space?.cadence ?? 'semi_monthly')}</p>
                 <p className="mt-0.5 text-[11px]" style={{ color: 'var(--ink-text-muted)' }}>
-                  {period.year} · {space?.cadence === 'semi_monthly' ? `part ${period.periodIndex ?? '-'} ` : 'monthly'}
+                  {period.label}{period.isCurrent ? ' · current' : ''}
                 </p>
               </button>
             ))}
@@ -1571,6 +1741,72 @@ function ItemRow({
   );
 }
 
+function SubsectionSelect({
+  value,
+  onChange,
+  categories,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  categories?: BudgetCategory[];
+}) {
+  const options = categories ?? [];
+  const valueIsKnown = value === '' || options.some((c) => c.name === value);
+  const [customMode, setCustomMode] = useState(!valueIsKnown && value !== '');
+
+  // If the value becomes an unknown (freshly-typed) name, stay in custom mode.
+  useEffect(() => {
+    if (value !== '' && !options.some((c) => c.name === value)) setCustomMode(true);
+  }, [value, options]);
+
+  if (customMode) {
+    return (
+      <div className="mt-1 flex gap-2">
+        <input
+          className="z-input flex-1"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="New subsection name"
+          autoFocus
+        />
+        <button
+          type="button"
+          className="z-btn z-btn-sm"
+          onClick={() => {
+            setCustomMode(false);
+            onChange('');
+          }}
+        >
+          Pick existing
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <select
+      className="z-select mt-1"
+      value={value}
+      onChange={(e) => {
+        if (e.target.value === '__new__') {
+          setCustomMode(true);
+          onChange('');
+        } else {
+          onChange(e.target.value);
+        }
+      }}
+    >
+      <option value="">No subsection</option>
+      {options.map((c) => (
+        <option key={c.id} value={c.name}>
+          {c.name}
+        </option>
+      ))}
+      <option value="__new__">+ New subsection…</option>
+    </select>
+  );
+}
+
 function ItemForm({
   value,
   onChange,
@@ -1604,18 +1840,11 @@ function ItemForm({
       </div>
       <div>
         <label className="z-label">Subsection</label>
-        <input
-          className="z-input mt-1"
-          list="budget-categories-datalist"
+        <SubsectionSelect
           value={value.category}
-          onChange={(e) => onChange({ ...value, category: e.target.value })}
-          placeholder="e.g. Housing, Transport (optional)"
+          onChange={(category) => onChange({ ...value, category })}
+          categories={categories}
         />
-        {categories && categories.length > 0 && (
-          <datalist id="budget-categories-datalist">
-            {categories.map((c) => <option key={c.id} value={c.name} />)}
-          </datalist>
-        )}
       </div>
       <div className="flex justify-end">
         <button className="z-btn z-btn-primary" onClick={onSubmit} disabled={saving}>
@@ -1643,18 +1872,14 @@ function TemplateForm({
         value={value.name}
         onChange={(e) => onChange({ ...value, name: e.target.value })}
       />
-      <input
-        className="z-input"
-        list="budget-template-categories-datalist"
-        placeholder="Subsection (optional)"
-        value={value.category}
-        onChange={(e) => onChange({ ...value, category: e.target.value })}
-      />
-      {categories && categories.length > 0 && (
-        <datalist id="budget-template-categories-datalist">
-          {categories.map((c) => <option key={c.id} value={c.name} />)}
-        </datalist>
-      )}
+      <div>
+        <label className="z-label">Subsection</label>
+        <SubsectionSelect
+          value={value.category}
+          onChange={(category) => onChange({ ...value, category })}
+          categories={categories}
+        />
+      </div>
       <div className="grid grid-cols-2 gap-2">
         <input
           className="z-input"

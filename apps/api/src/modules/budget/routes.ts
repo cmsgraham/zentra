@@ -7,6 +7,7 @@ type Cadence = 'monthly' | 'semi_monthly' | 'none';
 type Recurrence = 'monthly' | 'weekly' | 'biweekly' | 'manual';
 type PeriodSlot = 'first' | 'second' | 'both' | 'manual';
 type EntryType = 'planned' | 'unplanned';
+type ItemKind = 'expense' | 'income';
 type SpaceRole = 'owner' | 'editor';
 
 const createSpaceSchema = z.object({
@@ -31,6 +32,7 @@ const monthlyEntrySchema = z.object({
   recurring: z.boolean().optional(),
   libraryDeductionId: z.string().uuid().nullable().optional(),
   subjectToDeductions: z.boolean().optional(),
+  payPeriod: z.union([z.literal(1), z.literal(2)]).nullable().optional(),
 });
 
 const updateMonthlyEntrySchema = z.object({
@@ -40,6 +42,15 @@ const updateMonthlyEntrySchema = z.object({
   libraryDeductionId: z.string().uuid().nullable().optional(),
   subjectToDeductions: z.boolean().optional(),
   amountOverridden: z.boolean().optional(),
+  payPeriod: z.union([z.literal(1), z.literal(2)]).nullable().optional(),
+});
+
+const cashflowSchema = z.object({
+  year: z.coerce.number().int().min(2000).max(2100),
+  month: z.coerce.number().int().min(1).max(12),
+  openingBalance: z.coerce.number().nullable().optional(),
+  actualQ1: z.coerce.number().nullable().optional(),
+  actualQ2: z.coerce.number().nullable().optional(),
 });
 
 const shareSpaceSchema = z.object({
@@ -91,6 +102,7 @@ const createItemSchema = z.object({
   amount: z.coerce.number().nonnegative(),
   paid: z.boolean().optional(),
   entryType: z.enum(['planned', 'unplanned']).default('planned'),
+  kind: z.enum(['expense', 'income']).default('expense'),
   dueDay: z.coerce.number().int().min(1).max(31).nullable().optional(),
   category: z.string().trim().max(120).nullable().optional(),
 });
@@ -101,6 +113,7 @@ const updateItemSchema = z.object({
   paid: z.boolean().optional(),
   dueDay: z.coerce.number().int().min(1).max(31).nullable().optional(),
   entryType: z.enum(['planned', 'unplanned']).optional(),
+  kind: z.enum(['expense', 'income']).optional(),
   category: z.string().trim().max(120).nullable().optional(),
 });
 
@@ -355,6 +368,7 @@ function mapItemRow(row: any) {
     amount: Number(row.amount),
     paid: row.paid,
     entryType: row.entry_type as EntryType,
+    kind: (row.kind ?? 'expense') as ItemKind,
     dueDay: row.due_day,
     category: row.category ?? null,
     createdAt: row.created_at,
@@ -503,10 +517,12 @@ export default async function budgetRoutes(app: FastifyInstance) {
       const rate = row.exchange_rate !== null && row.exchange_rate !== undefined ? Number(row.exchange_rate) : 540;
       const stats = await app.pg.query(
         `SELECT
-            count(*) FILTER (WHERE entry_type = 'planned') AS planned_count,
-            count(*) FILTER (WHERE entry_type = 'unplanned') AS unplanned_count,
-            count(*) FILTER (WHERE paid = false) AS unpaid_count,
-            coalesce(sum(CASE WHEN amount < 6000 THEN amount * $2 ELSE amount END), 0) AS total_amount
+            count(*) FILTER (WHERE entry_type = 'planned' AND kind = 'expense') AS planned_count,
+            count(*) FILTER (WHERE entry_type = 'unplanned' AND kind = 'expense') AS unplanned_count,
+            count(*) FILTER (WHERE kind = 'income') AS income_count,
+            count(*) FILTER (WHERE paid = false AND kind = 'expense') AS unpaid_count,
+            coalesce(sum(CASE WHEN kind = 'expense' THEN (CASE WHEN amount < 6000 THEN amount * $2 ELSE amount END) ELSE 0 END), 0) AS total_amount,
+            coalesce(sum(CASE WHEN kind = 'income' THEN (CASE WHEN amount < 6000 THEN amount * $2 ELSE amount END) ELSE 0 END), 0) AS income_total
          FROM planned_expenses
          WHERE period_id = $1`,
         [current.id, rate],
@@ -518,8 +534,11 @@ export default async function budgetRoutes(app: FastifyInstance) {
         summary: {
           plannedCount: Number(s.planned_count),
           unplannedCount: Number(s.unplanned_count),
+          incomeCount: Number(s.income_count),
           unpaidCount: Number(s.unpaid_count),
           totalAmount: Number(s.total_amount),
+          incomeTotal: Number(s.income_total),
+          netTotal: Number(s.income_total) - Number(s.total_amount),
         },
       });
     }
@@ -790,10 +809,12 @@ export default async function budgetRoutes(app: FastifyInstance) {
 
     const stats = await app.pg.query(
       `SELECT
-          count(*) FILTER (WHERE entry_type = 'planned') AS planned_count,
-          count(*) FILTER (WHERE entry_type = 'unplanned') AS unplanned_count,
-          count(*) FILTER (WHERE paid = false) AS unpaid_count,
-          coalesce(sum(CASE WHEN amount < 6000 THEN amount * $2 ELSE amount END), 0) AS total_amount
+          count(*) FILTER (WHERE entry_type = 'planned' AND kind = 'expense') AS planned_count,
+          count(*) FILTER (WHERE entry_type = 'unplanned' AND kind = 'expense') AS unplanned_count,
+          count(*) FILTER (WHERE kind = 'income') AS income_count,
+          count(*) FILTER (WHERE paid = false AND kind = 'expense') AS unpaid_count,
+          coalesce(sum(CASE WHEN kind = 'expense' THEN (CASE WHEN amount < 6000 THEN amount * $2 ELSE amount END) ELSE 0 END), 0) AS total_amount,
+          coalesce(sum(CASE WHEN kind = 'income' THEN (CASE WHEN amount < 6000 THEN amount * $2 ELSE amount END) ELSE 0 END), 0) AS income_total
        FROM planned_expenses
        WHERE period_id = $1`,
       [periodId, rate],
@@ -805,8 +826,11 @@ export default async function budgetRoutes(app: FastifyInstance) {
       summary: {
         plannedCount: Number(s.planned_count),
         unplannedCount: Number(s.unplanned_count),
+        incomeCount: Number(s.income_count),
         unpaidCount: Number(s.unpaid_count),
         totalAmount: Number(s.total_amount),
+        incomeTotal: Number(s.income_total),
+        netTotal: Number(s.income_total) - Number(s.total_amount),
       },
     };
   });
@@ -1214,8 +1238,8 @@ export default async function budgetRoutes(app: FastifyInstance) {
 
     const inserted = await app.pg.query(
       `INSERT INTO planned_expenses
-        (period_id, template_id, name, amount, paid, entry_type, due_day, category)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        (period_id, template_id, name, amount, paid, entry_type, kind, due_day, category)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
       [
         periodId,
@@ -1224,6 +1248,7 @@ export default async function budgetRoutes(app: FastifyInstance) {
         body.amount,
         paid,
         body.entryType,
+        body.kind,
         body.dueDay ?? null,
         body.category?.trim() || null,
       ],
@@ -1447,6 +1472,97 @@ export default async function budgetRoutes(app: FastifyInstance) {
     return reply.status(200).send({ created: created.length, skipped, reset, items: created });
   });
 
+  // Clone all line items (income + expenses) from the previous period into this
+  // one. Copies preserve amounts/names/categories but are reset to unpaid. This
+  // is the "start of new month = last month's plan" workflow. Items already
+  // present in the target (matched by name + kind) are skipped so re-running is
+  // safe.
+  app.post('/budget/periods/:periodId/clone-from-previous', { preHandler: [app.authenticate] }, async (request, reply) => {
+    const { periodId } = request.params as { periodId: string };
+    const userId = request.user.sub;
+
+    await assertPeriodOwner(app, periodId, userId);
+
+    const periodRes = await app.pg.query(
+      'SELECT id, space_id, start_date FROM budget_periods WHERE id = $1',
+      [periodId],
+    );
+    if (periodRes.rows.length === 0) throw new NotFoundError('Period not found');
+    const target = periodRes.rows[0] as { id: string; space_id: string; start_date: string };
+
+    // Most recent earlier period in the same space that has items (skip the
+    // no-cadence "Future purchases" sentinel).
+    const sourceRes = await app.pg.query(
+      `SELECT bp.id, bp.label
+         FROM budget_periods bp
+        WHERE bp.space_id = $1
+          AND bp.id <> $2
+          AND bp.start_date < $3
+          AND NOT (bp.year = 2100 AND bp.month = 12 AND bp.label = 'Future purchases')
+          AND EXISTS (SELECT 1 FROM planned_expenses pe WHERE pe.period_id = bp.id)
+        ORDER BY bp.start_date DESC
+        LIMIT 1`,
+      [target.space_id, periodId, target.start_date],
+    );
+    if (sourceRes.rows.length === 0) {
+      throw new BadRequestError('No previous period with items to clone from');
+    }
+    const source = sourceRes.rows[0] as { id: string; label: string };
+
+    const srcItems = await app.pg.query(
+      `SELECT template_id, name, amount, entry_type, kind, due_day, category
+         FROM planned_expenses
+        WHERE period_id = $1
+        ORDER BY created_at ASC`,
+      [source.id],
+    );
+
+    // Existing (name, kind) pairs in the target to avoid duplicates on re-run.
+    const existing = await app.pg.query(
+      'SELECT lower(name) AS name, kind FROM planned_expenses WHERE period_id = $1',
+      [periodId],
+    );
+    const existingKeys = new Set<string>(
+      existing.rows.map((r: any) => `${String(r.name)}::${r.kind}`),
+    );
+
+    const created: any[] = [];
+    let skipped = 0;
+    for (const it of srcItems.rows as Array<{
+      template_id: string | null;
+      name: string;
+      amount: string | number;
+      entry_type: EntryType;
+      kind: ItemKind;
+      due_day: number | null;
+      category: string | null;
+    }>) {
+      const key = `${it.name.toLowerCase()}::${it.kind}`;
+      if (existingKeys.has(key)) {
+        skipped += 1;
+        continue;
+      }
+      const ins = await app.pg.query(
+        `INSERT INTO planned_expenses
+          (period_id, template_id, name, amount, paid, entry_type, kind, due_day, category)
+         VALUES ($1, $2, $3, $4, false, $5, $6, $7, $8)
+         RETURNING *`,
+        [periodId, it.template_id, it.name, it.amount, it.entry_type, it.kind, it.due_day, it.category ?? null],
+      );
+      created.push(mapItemRow(ins.rows[0]));
+      existingKeys.add(key);
+      await ensureCategory(app, target.space_id, it.category ?? null);
+    }
+
+    return reply.status(200).send({
+      created: created.length,
+      skipped,
+      sourcePeriodId: source.id,
+      sourceLabel: source.label,
+      items: created,
+    });
+  });
+
   app.put('/budget/items/:itemId', { preHandler: [app.authenticate] }, async (request) => {
     const { itemId } = request.params as { itemId: string };
     const userId = request.user.sub;
@@ -1473,6 +1589,10 @@ export default async function budgetRoutes(app: FastifyInstance) {
     if (body.entryType !== undefined) {
       sets.push(`entry_type = $${idx++}`);
       values.push(body.entryType);
+    }
+    if (body.kind !== undefined) {
+      sets.push(`kind = $${idx++}`);
+      values.push(body.kind);
     }
     if (body.dueDay !== undefined) {
       sets.push(`due_day = $${idx++}`);
@@ -1558,6 +1678,7 @@ export default async function budgetRoutes(app: FastifyInstance) {
       libraryDeductionId: row.library_deduction_id ?? null,
       subjectToDeductions: row.subject_to_deductions !== false,
       amountOverridden: row.amount_overridden === true,
+      payPeriod: row.pay_period === 1 || row.pay_period === 2 ? (row.pay_period as 1 | 2) : null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -1580,8 +1701,8 @@ export default async function budgetRoutes(app: FastifyInstance) {
       const py = prevDate.getUTCFullYear();
       const pm = prevDate.getUTCMonth() + 1;
       await app.pg.query(
-        `INSERT INTO monthly_entries (user_id, year, month, kind, label, amount, recurring, sort_order, library_deduction_id, subject_to_deductions, amount_overridden)
-         SELECT user_id, $4, $5, kind, label, amount, recurring, sort_order, library_deduction_id, subject_to_deductions, false
+        `INSERT INTO monthly_entries (user_id, year, month, kind, label, amount, recurring, sort_order, library_deduction_id, subject_to_deductions, amount_overridden, pay_period)
+         SELECT user_id, $4, $5, kind, label, amount, recurring, sort_order, library_deduction_id, subject_to_deductions, false, pay_period
          FROM monthly_entries
          WHERE user_id = $1 AND year = $2 AND month = $3 AND recurring = true`,
         [userId, py, pm, year, month],
@@ -1618,6 +1739,7 @@ export default async function budgetRoutes(app: FastifyInstance) {
          FROM planned_expenses pe
          JOIN budget_periods bp ON bp.id = pe.period_id
          WHERE bp.space_id = $1
+           AND pe.kind = 'expense'
            AND bp.year = $2 AND bp.month = $3
            AND NOT (bp.year = 2100 AND bp.month = 12 AND bp.label = 'Future purchases')
            AND (
@@ -1640,6 +1762,7 @@ export default async function budgetRoutes(app: FastifyInstance) {
            FROM planned_expenses pe
            JOIN budget_periods bp ON bp.id = pe.period_id
           WHERE bp.space_id = $1
+            AND pe.kind = 'expense'
             AND bp.year = $2 AND bp.month = $3
             AND NOT (bp.year = 2100 AND bp.month = 12 AND bp.label = 'Future purchases')
             AND (
@@ -1750,6 +1873,103 @@ export default async function budgetRoutes(app: FastifyInstance) {
       }
     }
 
+    // ── Cash flow per quincena (half-month pay period) ──────────────────────
+    // Each income/deduction is attributed to the quincena it hits the bank
+    // (pay_period 1 or 2); entries that span both (NULL) are split 50/50 so
+    // the two halves still add up to the monthly totals.
+    const qcf = {
+      1: { income: 0, deduction: 0 },
+      2: { income: 0, deduction: 0 },
+    };
+    for (const e of entries.rows) {
+      const amt = recomputed.has(e.id) ? recomputed.get(e.id)! : Number(e.amount);
+      const bucket = e.kind === 'income' ? 'income' : 'deduction';
+      if (e.pay_period === 1) qcf[1][bucket] += amt;
+      else if (e.pay_period === 2) qcf[2][bucket] += amt;
+      else { qcf[1][bucket] += amt / 2; qcf[2][bucket] += amt / 2; }
+    }
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+
+    // Budget-space expenses per quincena. Semi-monthly spaces already tag each
+    // expense with its quincena (period_index 1|2); monthly-cadence items are
+    // attributed by due day (<=15 → Q1) and split evenly when unknown. We track
+    // paid vs planned so the expected balance can reflect cash that has already
+    // left the account.
+    const expRows = await app.pg.query(
+      `SELECT bp.period_index, pe.due_day, pe.paid,
+              (CASE WHEN pe.amount < 6000 THEN pe.amount * coalesce(bs.exchange_rate, 540) ELSE pe.amount END) AS amount_crc
+         FROM planned_expenses pe
+         JOIN budget_periods bp ON bp.id = pe.period_id
+         JOIN budget_spaces bs ON bs.id = bp.space_id
+        WHERE pe.kind = 'expense'
+          AND bp.year = $2 AND bp.month = $3
+          AND NOT (bp.year = 2100 AND bp.month = 12 AND bp.label = 'Future purchases')
+          AND bs.include_in_monthly = true
+          AND (bs.owner_user_id = $1 OR EXISTS (
+            SELECT 1 FROM budget_space_members m WHERE m.space_id = bs.id AND m.user_id = $1
+          ))`,
+      [userId, year, month],
+    );
+    const exp = {
+      1: { paid: 0, planned: 0 },
+      2: { paid: 0, planned: 0 },
+    };
+    for (const r of expRows.rows) {
+      const amt = Number(r.amount_crc);
+      let half: 1 | 2 | null = r.period_index === 1 ? 1 : r.period_index === 2 ? 2 : null;
+      if (half === null && r.due_day != null) half = Number(r.due_day) <= 15 ? 1 : 2;
+      const put = (h: 1 | 2, portion: number) => {
+        exp[h].planned += portion;
+        if (r.paid === true) exp[h].paid += portion;
+      };
+      if (half === null) { put(1, amt / 2); put(2, amt / 2); }
+      else put(half, amt);
+    }
+
+    const balRow = await app.pg.query(
+      'SELECT opening_balance, actual_q1, actual_q2 FROM monthly_cashflow WHERE user_id = $1 AND year = $2 AND month = $3',
+      [userId, year, month],
+    );
+    const bal = balRow.rows[0] ?? {};
+    const openingBalance = bal.opening_balance !== null && bal.opening_balance !== undefined ? Number(bal.opening_balance) : null;
+    const actualQ1 = bal.actual_q1 !== null && bal.actual_q1 !== undefined ? Number(bal.actual_q1) : null;
+    const actualQ2 = bal.actual_q2 !== null && bal.actual_q2 !== undefined ? Number(bal.actual_q2) : null;
+    const netQ1 = round2(qcf[1].income - qcf[1].deduction);
+    const netQ2 = round2(qcf[2].income - qcf[2].deduction);
+    const base = openingBalance ?? 0;
+    // Expected = opening + running (net deposited − expenses already paid).
+    // Money not yet paid hasn't left the bank, so it doesn't lower expected.
+    const expectedQ1 = round2(base + netQ1 - exp[1].paid);
+    const expectedQ2 = round2(base + netQ1 - exp[1].paid + netQ2 - exp[2].paid);
+    // Projected = if every planned expense gets paid (end-of-quincena outlook).
+    const projectedQ1 = round2(base + netQ1 - exp[1].planned);
+    const projectedQ2 = round2(base + netQ1 - exp[1].planned + netQ2 - exp[2].planned);
+    const cashflow = {
+      openingBalance,
+      q1: {
+        income: round2(qcf[1].income),
+        deduction: round2(qcf[1].deduction),
+        net: netQ1,
+        expensePaid: round2(exp[1].paid),
+        expensePlanned: round2(exp[1].planned),
+        expected: expectedQ1,
+        projected: projectedQ1,
+        actual: actualQ1,
+        drift: actualQ1 !== null ? round2(actualQ1 - expectedQ1) : null,
+      },
+      q2: {
+        income: round2(qcf[2].income),
+        deduction: round2(qcf[2].deduction),
+        net: netQ2,
+        expensePaid: round2(exp[2].paid),
+        expensePlanned: round2(exp[2].planned),
+        expected: expectedQ2,
+        projected: projectedQ2,
+        actual: actualQ2,
+        drift: actualQ2 !== null ? round2(actualQ2 - expectedQ2) : null,
+      },
+    };
+
     return {
       year,
       month,
@@ -1776,6 +1996,7 @@ export default async function budgetRoutes(app: FastifyInstance) {
         expenseTotal,
         leftover: incomeTotal - deductionTotal - expenseTotal,
       },
+      cashflow,
     };
   });
 
@@ -1790,8 +2011,8 @@ export default async function budgetRoutes(app: FastifyInstance) {
     const sortOrder = Number(max.rows[0].m) + 1;
 
     const inserted = await app.pg.query(
-      `INSERT INTO monthly_entries (user_id, year, month, kind, label, amount, recurring, sort_order, library_deduction_id, subject_to_deductions)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO monthly_entries (user_id, year, month, kind, label, amount, recurring, sort_order, library_deduction_id, subject_to_deductions, pay_period)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
       [
         userId,
@@ -1804,6 +2025,7 @@ export default async function budgetRoutes(app: FastifyInstance) {
         sortOrder,
         body.libraryDeductionId ?? null,
         body.subjectToDeductions ?? true,
+        body.payPeriod ?? null,
       ],
     );
     return reply.status(201).send(mapMonthlyEntryRow(inserted.rows[0]));
@@ -1846,6 +2068,9 @@ export default async function budgetRoutes(app: FastifyInstance) {
     if (body.amountOverridden !== undefined) {
       sets.push(`amount_overridden = $${idx++}`); values.push(body.amountOverridden);
     }
+    if (body.payPeriod !== undefined) {
+      sets.push(`pay_period = $${idx++}`); values.push(body.payPeriod);
+    }
     if (sets.length === 0) throw new BadRequestError('No fields to update');
     sets.push('updated_at = now()');
     values.push(id, userId);
@@ -1867,6 +2092,36 @@ export default async function budgetRoutes(app: FastifyInstance) {
     );
     if (result.rowCount === 0) throw new NotFoundError('Entry not found');
     return reply.status(204).send();
+  });
+
+  // ─── Monthly cash flow (bank reconciliation) ─────────────────────────────
+  // Store the actual bank balances so the client can compare them against the
+  // expected balance (opening + net cash flow per quincena) and surface drift.
+  app.put('/budget/monthly/cashflow', { preHandler: [app.authenticate] }, async (request) => {
+    const userId = request.user.sub;
+    const body = cashflowSchema.parse(request.body);
+
+    const existing = await app.pg.query(
+      'SELECT opening_balance, actual_q1, actual_q2 FROM monthly_cashflow WHERE user_id = $1 AND year = $2 AND month = $3',
+      [userId, body.year, body.month],
+    );
+    const prev = existing.rows[0] ?? {};
+    const opening = body.openingBalance !== undefined ? body.openingBalance : (prev.opening_balance ?? null);
+    const q1 = body.actualQ1 !== undefined ? body.actualQ1 : (prev.actual_q1 ?? null);
+    const q2 = body.actualQ2 !== undefined ? body.actualQ2 : (prev.actual_q2 ?? null);
+
+    await app.pg.query(
+      `INSERT INTO monthly_cashflow (user_id, year, month, opening_balance, actual_q1, actual_q2)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (user_id, year, month)
+       DO UPDATE SET opening_balance = $4, actual_q1 = $5, actual_q2 = $6, updated_at = now()`,
+      [userId, body.year, body.month, opening, q1, q2],
+    );
+    return {
+      openingBalance: opening !== null && opening !== undefined ? Number(opening) : null,
+      actualQ1: q1 !== null && q1 !== undefined ? Number(q1) : null,
+      actualQ2: q2 !== null && q2 !== undefined ? Number(q2) : null,
+    };
   });
 
   // ─── Monthly snapshots ───────────────────────────────────────────────────

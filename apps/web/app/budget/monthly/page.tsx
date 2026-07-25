@@ -21,6 +21,7 @@ interface MonthlyEntry {
   libraryRate: number | null;
   subjectToDeductions: boolean;
   amountOverridden: boolean;
+  payPeriod: 1 | 2 | null;
 }
 
 interface MonthlySpaceItem {
@@ -48,12 +49,31 @@ interface MonthlySummary {
   leftover: number;
 }
 
+interface CashflowHalf {
+  income: number;
+  deduction: number;
+  net: number;
+  expensePaid: number;
+  expensePlanned: number;
+  expected: number;
+  projected: number;
+  actual: number | null;
+  drift: number | null;
+}
+
+interface MonthlyCashflow {
+  openingBalance: number | null;
+  q1: CashflowHalf;
+  q2: CashflowHalf;
+}
+
 interface MonthlyResponse {
   year: number;
   month: number;
   entries: MonthlyEntry[];
   spaces: MonthlySpace[];
   summary: MonthlySummary;
+  cashflow: MonthlyCashflow;
 }
 
 type DeductionKind = 'percentage' | 'fixed' | 'progressive' | 'garnishment';
@@ -87,6 +107,18 @@ function formatCRC(n: number): string {
   return `₡${Math.round(n).toLocaleString('en-US')}`;
 }
 
+function formatSignedCRC(n: number): string {
+  const sign = n > 0 ? '+' : n < 0 ? '−' : '';
+  return `${sign}₡${Math.abs(Math.round(n)).toLocaleString('en-US')}`;
+}
+
+function parseAmount(s: string): number | null {
+  const t = s.trim();
+  if (t === '') return null;
+  const n = Number(t.replace(/,/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+
 export default function MonthlyPlanningPage() {
   const router = useRouter();
   const isMobile = useIsMobile();
@@ -105,6 +137,14 @@ export default function MonthlyPlanningPage() {
   const [editRecurring, setEditRecurring] = useState(false);
   const [editSubject, setEditSubject] = useState(true);
   const [addSubject, setAddSubject] = useState(true);
+  const [addPayPeriod, setAddPayPeriod] = useState<1 | 2 | null>(null);
+  const [editPayPeriod, setEditPayPeriod] = useState<1 | 2 | null>(null);
+  const [pickerPayPeriod, setPickerPayPeriod] = useState<1 | 2 | null>(null);
+  // Cash-flow reconciliation inputs (opening balance + actual bank balance per quincena).
+  const [openingInput, setOpeningInput] = useState('');
+  const [q1Input, setQ1Input] = useState('');
+  const [q2Input, setQ2Input] = useState('');
+  const [savingCashflow, setSavingCashflow] = useState(false);
   // Deduction picker (from library)
   const [pickerMode, setPickerMode] = useState<'library' | 'custom'>('library');
   const [library, setLibrary] = useState<LibraryDeduction[]>([]);
@@ -139,6 +179,15 @@ export default function MonthlyPlanningPage() {
   }, [year, month]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Sync the cash-flow inputs whenever fresh data arrives so edits made
+  // elsewhere (or a month switch) are reflected in the reconciliation fields.
+  useEffect(() => {
+    const cf = data?.cashflow;
+    setOpeningInput(cf?.openingBalance != null ? String(cf.openingBalance) : '');
+    setQ1Input(cf?.q1.actual != null ? String(cf.q1.actual) : '');
+    setQ2Input(cf?.q2.actual != null ? String(cf.q2.actual) : '');
+  }, [data]);
 
   // Auto-snapshot: when viewing the current month on its last calendar day,
   // post a once-per-month snapshot so reporting captures the final state.
@@ -186,6 +235,7 @@ export default function MonthlyPlanningPage() {
         label: addLabel.trim(),
         amount: amt,
         recurring: addRecurring,
+        payPeriod: addPayPeriod,
         ...(showAdd === 'income' ? { subjectToDeductions: addSubject } : {}),
       },
     });
@@ -194,6 +244,7 @@ export default function MonthlyPlanningPage() {
     setAddAmount('');
     setAddRecurring(true);
     setAddSubject(true);
+    setAddPayPeriod(null);
     await load();
   }
 
@@ -203,6 +254,7 @@ export default function MonthlyPlanningPage() {
     setEditAmount(String(entry.amount));
     setEditRecurring(entry.recurring);
     setEditSubject(entry.subjectToDeductions);
+    setEditPayPeriod(entry.payPeriod);
   }
 
   async function saveEdit() {
@@ -215,6 +267,7 @@ export default function MonthlyPlanningPage() {
         label: editLabel.trim(),
         amount: amt,
         recurring: editRecurring,
+        payPeriod: editPayPeriod,
         ...(editing.kind === 'income' ? { subjectToDeductions: editSubject } : {}),
       },
     });
@@ -250,6 +303,31 @@ export default function MonthlyPlanningPage() {
       body: { amountOverridden: false },
     });
     await load();
+  }
+
+  // Quick-assign which quincena an entry hits the bank. Clicking the active
+  // half again clears it back to "both" (null).
+  async function setPayPeriod(entry: MonthlyEntry, pp: 1 | 2 | null) {
+    const next = entry.payPeriod === pp ? null : pp;
+    await api(`/budget/monthly/entries/${entry.id}`, {
+      method: 'PUT',
+      body: { payPeriod: next },
+    });
+    await load();
+  }
+
+  // Persist the bank-reconciliation inputs (opening + actual per quincena).
+  async function saveCashflow(patch: { openingBalance?: number | null; actualQ1?: number | null; actualQ2?: number | null }) {
+    setSavingCashflow(true);
+    try {
+      await api('/budget/monthly/cashflow', {
+        method: 'PUT',
+        body: { year, month, ...patch },
+      });
+      await load();
+    } finally {
+      setSavingCashflow(false);
+    }
   }
 
   async function takeSnapshot() {
@@ -308,6 +386,8 @@ export default function MonthlyPlanningPage() {
     setAddLabel('');
     setAddAmount('');
     setAddRecurring(true);
+    setAddPayPeriod(null);
+    setPickerPayPeriod(null);
     setPicked({});
     setLibraryLoading(true);
     try {
@@ -349,6 +429,7 @@ export default function MonthlyPlanningPage() {
             amount: Math.round(amt),
             recurring: true,
             libraryDeductionId: id,
+            payPeriod: pickerPayPeriod,
           },
         });
       }
@@ -440,6 +521,106 @@ export default function MonthlyPlanningPage() {
           </div>
         )}
 
+        {/* Cash flow — expected vs. actual bank balance per quincena */}
+        {data?.cashflow && (
+          <div
+            className="mt-4 rounded-2xl border px-5 py-4"
+            style={{ borderColor: 'var(--ink-border-subtle)', background: 'var(--ink-surface)', boxShadow: 'var(--ink-shadow-sm)' }}
+          >
+            <div className="mb-1 flex items-center justify-between">
+              <h2 className="text-sm font-medium" style={{ color: 'var(--ink-text-secondary)' }}>Cash flow</h2>
+              {savingCashflow && <span className="text-[11px]" style={{ color: 'var(--ink-text-faint)' }}>Saving…</span>}
+            </div>
+            <p className="mb-3 text-[11px]" style={{ color: 'var(--ink-text-muted)' }}>
+              What lands in the bank each quincena. Expected = opening balance + net income − expenses already paid; drift = actual − expected.
+            </p>
+
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <label className="text-xs" style={{ color: 'var(--ink-text-secondary)' }}>Opening balance</label>
+              <input
+                className="z-input w-32 text-right tabular-nums"
+                inputMode="decimal"
+                value={openingInput}
+                onChange={(e) => setOpeningInput(e.target.value)}
+                onBlur={() => {
+                  const v = parseAmount(openingInput);
+                  if (v !== (data.cashflow.openingBalance ?? null)) saveCashflow({ openingBalance: v });
+                }}
+                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                placeholder="₡0"
+              />
+            </div>
+
+            <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-4 gap-y-1.5 text-sm">
+              <span />
+              <span className="text-right text-[11px] font-medium uppercase tracking-wide" style={{ color: 'var(--ink-text-faint)' }}>Quincena 1</span>
+              <span className="text-right text-[11px] font-medium uppercase tracking-wide" style={{ color: 'var(--ink-text-faint)' }}>Quincena 2</span>
+
+              <span style={{ color: 'var(--ink-text-secondary)' }}>Income</span>
+              <span className="text-right tabular-nums" style={{ color: 'var(--ink-text)' }}>{formatCRC(data.cashflow.q1.income)}</span>
+              <span className="text-right tabular-nums" style={{ color: 'var(--ink-text)' }}>{formatCRC(data.cashflow.q2.income)}</span>
+
+              <span style={{ color: 'var(--ink-text-secondary)' }}>− Deductions</span>
+              <span className="text-right tabular-nums" style={{ color: 'var(--ink-text)' }}>{formatCRC(data.cashflow.q1.deduction)}</span>
+              <span className="text-right tabular-nums" style={{ color: 'var(--ink-text)' }}>{formatCRC(data.cashflow.q2.deduction)}</span>
+
+              <span className="font-medium" style={{ color: 'var(--ink-text)' }}>Net</span>
+              <span className="text-right font-medium tabular-nums" style={{ color: 'var(--ink-text)' }}>{formatCRC(data.cashflow.q1.net)}</span>
+              <span className="text-right font-medium tabular-nums" style={{ color: 'var(--ink-text)' }}>{formatCRC(data.cashflow.q2.net)}</span>
+
+              <span style={{ color: 'var(--ink-text-secondary)' }}>− Expenses paid</span>
+              <span className="text-right tabular-nums" style={{ color: 'var(--ink-text)' }}>{formatCRC(data.cashflow.q1.expensePaid)}</span>
+              <span className="text-right tabular-nums" style={{ color: 'var(--ink-text)' }}>{formatCRC(data.cashflow.q2.expensePaid)}</span>
+
+              <span className="border-t pt-2 font-medium" style={{ borderColor: 'var(--ink-border-subtle)', color: 'var(--ink-text)' }}>Expected in bank</span>
+              <span className="border-t pt-2 text-right font-medium tabular-nums" style={{ borderColor: 'var(--ink-border-subtle)', color: 'var(--ink-text)' }}>{formatCRC(data.cashflow.q1.expected)}</span>
+              <span className="border-t pt-2 text-right font-medium tabular-nums" style={{ borderColor: 'var(--ink-border-subtle)', color: 'var(--ink-text)' }}>{formatCRC(data.cashflow.q2.expected)}</span>
+
+              <span style={{ color: 'var(--ink-text-secondary)' }}>Actual in bank</span>
+              <input
+                className="z-input w-28 justify-self-end text-right tabular-nums"
+                inputMode="decimal"
+                value={q1Input}
+                onChange={(e) => setQ1Input(e.target.value)}
+                onBlur={() => {
+                  const v = parseAmount(q1Input);
+                  if (v !== (data.cashflow.q1.actual ?? null)) saveCashflow({ actualQ1: v });
+                }}
+                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                placeholder="—"
+              />
+              <input
+                className="z-input w-28 justify-self-end text-right tabular-nums"
+                inputMode="decimal"
+                value={q2Input}
+                onChange={(e) => setQ2Input(e.target.value)}
+                onBlur={() => {
+                  const v = parseAmount(q2Input);
+                  if (v !== (data.cashflow.q2.actual ?? null)) saveCashflow({ actualQ2: v });
+                }}
+                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                placeholder="—"
+              />
+
+              <span style={{ color: 'var(--ink-text-secondary)' }}>Drift</span>
+              <span className="text-right font-medium tabular-nums" style={{ color: data.cashflow.q1.drift == null ? 'var(--ink-text-faint)' : data.cashflow.q1.drift < 0 ? '#dc2626' : data.cashflow.q1.drift > 0 ? '#16a34a' : 'var(--ink-text-secondary)' }}>
+                {data.cashflow.q1.drift == null ? '—' : formatSignedCRC(data.cashflow.q1.drift)}
+              </span>
+              <span className="text-right font-medium tabular-nums" style={{ color: data.cashflow.q2.drift == null ? 'var(--ink-text-faint)' : data.cashflow.q2.drift < 0 ? '#dc2626' : data.cashflow.q2.drift > 0 ? '#16a34a' : 'var(--ink-text-secondary)' }}>
+                {data.cashflow.q2.drift == null ? '—' : formatSignedCRC(data.cashflow.q2.drift)}
+              </span>
+            </div>
+
+            {(data.cashflow.q1.expensePlanned - data.cashflow.q1.expensePaid > 0
+              || data.cashflow.q2.expensePlanned - data.cashflow.q2.expensePaid > 0) && (
+              <p className="mt-3 border-t pt-2 text-[11px]" style={{ borderColor: 'var(--ink-border-subtle)', color: 'var(--ink-text-muted)' }}>
+                Still unpaid — Q1 {formatCRC(data.cashflow.q1.expensePlanned - data.cashflow.q1.expensePaid)}, Q2 {formatCRC(data.cashflow.q2.expensePlanned - data.cashflow.q2.expensePaid)}.
+                If paid, projected end balance: Q1 {formatCRC(data.cashflow.q1.projected)}, Q2 {formatCRC(data.cashflow.q2.projected)}.
+              </p>
+            )}
+          </div>
+        )}
+
         {loading && !data && (
           <p className="mt-6 text-sm" style={{ color: 'var(--ink-text-muted)' }}>Loading…</p>
         )}
@@ -465,6 +646,7 @@ export default function MonthlyPlanningPage() {
               onInlineSave={() => saveInlineAmount(e)}
               onEdit={() => openEdit(e)}
               onDelete={() => deleteEntry(e.id)}
+              onSetPayPeriod={(pp) => setPayPeriod(e, pp)}
             />
           ))}
         </Section>
@@ -503,6 +685,7 @@ export default function MonthlyPlanningPage() {
               onInlineSave={() => saveInlineAmount(e)}
               onEdit={() => openEdit(e)}
               onDelete={() => deleteEntry(e.id)}
+              onSetPayPeriod={(pp) => setPayPeriod(e, pp)}
             />
           ))}
         </Section>
@@ -637,6 +820,12 @@ export default function MonthlyPlanningPage() {
               <input type="checkbox" checked={addRecurring} onChange={(e) => setAddRecurring(e.target.checked)} />
               Repeat every month
             </label>
+            <div>
+              <label className="z-label">Pay period</label>
+              <div className="mt-1">
+                <PayPeriodPicker value={addPayPeriod} onChange={setAddPayPeriod} />
+              </div>
+            </div>
             <label className="flex items-start gap-2 text-sm">
               <input
                 type="checkbox"
@@ -735,6 +924,10 @@ export default function MonthlyPlanningPage() {
                   })}
                 </div>
               )}
+              <div className="flex items-center justify-between border-t pt-2" style={{ borderColor: 'var(--ink-border-subtle)' }}>
+                <span className="text-xs" style={{ color: 'var(--ink-text-muted)' }}>Pay period</span>
+                <PayPeriodPicker value={pickerPayPeriod} onChange={setPickerPayPeriod} size="sm" />
+              </div>
               <div className="flex items-center justify-between pt-1">
                 <button
                   className="text-xs underline"
@@ -783,6 +976,12 @@ export default function MonthlyPlanningPage() {
                 <input type="checkbox" checked={addRecurring} onChange={(e) => setAddRecurring(e.target.checked)} />
                 Repeat every month
               </label>
+              <div>
+                <label className="z-label">Pay period</label>
+                <div className="mt-1">
+                  <PayPeriodPicker value={addPayPeriod} onChange={setAddPayPeriod} />
+                </div>
+              </div>
               <div className="flex justify-end gap-2 pt-1">
                 <button className="z-btn" onClick={() => setShowAdd(null)}>Cancel</button>
                 <button className="z-btn z-btn-primary" onClick={addEntry} disabled={!addLabel.trim()}>Add</button>
@@ -808,6 +1007,12 @@ export default function MonthlyPlanningPage() {
               <input type="checkbox" checked={editRecurring} onChange={(e) => setEditRecurring(e.target.checked)} />
               Repeat every month
             </label>
+            <div>
+              <label className="z-label">Pay period</label>
+              <div className="mt-1">
+                <PayPeriodPicker value={editPayPeriod} onChange={setEditPayPeriod} />
+              </div>
+            </div>
             {editing.kind === 'income' && (
               <label className="flex items-start gap-2 text-sm">
                 <input
@@ -915,6 +1120,7 @@ function Row({
   onInlineSave,
   onEdit,
   onDelete,
+  onSetPayPeriod,
 }: {
   entry: MonthlyEntry;
   disabled: boolean;
@@ -927,6 +1133,7 @@ function Row({
   onInlineSave: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onSetPayPeriod: (pp: 1 | 2 | null) => void;
 }) {
   // Library-linked deductions show their rate (e.g. "10.5%") or kind label so
   // the user can see at a glance which line is statutory and how it's computed.
@@ -976,6 +1183,11 @@ function Row({
           {entry.recurring && (
             <span className="ml-2 text-[10px] uppercase tracking-wide" style={{ color: 'var(--ink-text-faint)' }}>recurs</span>
           )}
+          {entry.payPeriod && (
+            <span className="ml-2 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium sm:hidden" style={{ background: 'var(--ink-subtle)', color: 'var(--ink-text-secondary)' }}>
+              Q{entry.payPeriod}
+            </span>
+          )}
         </p>
       </div>
       {isInlineEditing ? (
@@ -1000,6 +1212,9 @@ function Row({
         </>
       ) : (
         <>
+          <div className="mr-2 hidden sm:block">
+            <PayPeriodPicker value={entry.payPeriod} onChange={onSetPayPeriod} size="sm" />
+          </div>
           <button
             className={`mr-2 text-sm tabular-nums ${disabled ? 'line-through opacity-50' : ''} ${inlineEditable ? 'underline-offset-2 hover:underline' : 'cursor-default'}`}
             style={{ color: 'var(--ink-text-secondary)' }}
@@ -1025,6 +1240,41 @@ function Row({
 function Empty({ text }: { text: string }) {
   return (
     <p className="px-3 py-3 text-xs" style={{ color: 'var(--ink-text-muted)' }}>{text}</p>
+  );
+}
+
+// Segmented selector for which quincena an entry hits the bank.
+// null = "Both" (spans the two halves, split evenly in the cash-flow view).
+function PayPeriodPicker({
+  value,
+  onChange,
+  size = 'md',
+}: {
+  value: 1 | 2 | null;
+  onChange: (v: 1 | 2 | null) => void;
+  size?: 'sm' | 'md';
+}) {
+  const opts: { v: 1 | 2 | null; label: string }[] = [
+    { v: 1, label: 'Q1' },
+    { v: 2, label: 'Q2' },
+    { v: null, label: 'Both' },
+  ];
+  const pad = size === 'sm' ? 'px-1.5 py-0.5 text-[11px]' : 'px-2.5 py-1 text-xs';
+  return (
+    <div className="inline-flex gap-0.5 rounded-lg p-0.5" style={{ background: 'var(--ink-subtle)' }}>
+      {opts.map((o) => (
+        <button
+          key={o.label}
+          type="button"
+          onClick={() => onChange(o.v)}
+          className={`rounded-md font-medium ${pad} ${value === o.v ? 'bg-white shadow-sm' : ''}`}
+          style={{ color: value === o.v ? 'var(--ink-text)' : 'var(--ink-text-muted)' }}
+          aria-pressed={value === o.v}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
   );
 }
 

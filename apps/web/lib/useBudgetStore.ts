@@ -7,6 +7,7 @@ export type BudgetCadence = 'monthly' | 'semi_monthly' | 'none';
 export type TemplateRecurrence = 'monthly' | 'weekly' | 'biweekly' | 'manual';
 export type TemplatePeriodSlot = 'first' | 'second' | 'both' | 'manual';
 export type BudgetEntryType = 'planned' | 'unplanned';
+export type BudgetItemKind = 'expense' | 'income';
 
 export interface BudgetPeriod {
   id: string;
@@ -25,8 +26,11 @@ export interface BudgetPeriod {
 export interface BudgetSpaceSummary {
   plannedCount: number;
   unplannedCount: number;
+  incomeCount?: number;
   unpaidCount: number;
   totalAmount: number;
+  incomeTotal?: number;
+  netTotal?: number;
 }
 
 export interface BudgetSpace {
@@ -69,6 +73,7 @@ export interface BudgetItem {
   amount: number;
   paid: boolean;
   entryType: BudgetEntryType;
+  kind: BudgetItemKind;
   dueDay: number | null;
   category: string | null;
   createdAt: string;
