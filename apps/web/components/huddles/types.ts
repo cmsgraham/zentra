@@ -27,6 +27,7 @@ export interface Huddle {
   endedAt: string | null;
   summary: string | null;
   templateId: string | null;
+  templateName?: string | null;
   emailSummaryOnClose?: boolean;
   summaryEmailedAt?: string | null;
   createdAt: string;

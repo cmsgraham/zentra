@@ -183,6 +183,7 @@ function formatHuddle(r: any) {
     endedAt: r.ended_at,
     summary: r.summary,
     templateId: r.template_id ?? null,
+    templateName: r.template_name ?? null,
     emailSummaryOnClose: r.email_summary_on_close ?? false,
     summaryEmailedAt: r.summary_emailed_at ?? null,
     createdAt: r.created_at,
@@ -807,10 +808,11 @@ export default async function huddleRoutes(app: FastifyInstance) {
     }
 
     const result = await app.pg.query(
-      `SELECT f.*, u.name AS host_name,
+      `SELECT f.*, u.name AS host_name, tpl.name AS template_name,
               (SELECT count(*)::int FROM huddle_participants p WHERE p.huddle_id = f.id) AS participant_count
        FROM huddles f
        LEFT JOIN users u ON u.id = f.host_user_id
+       LEFT JOIN huddle_templates tpl ON tpl.id = f.template_id
        WHERE ${conds.join(' AND ')}
        -- Meetings are a timeline, not an index. Alphabetical ordering made
        -- repeat huddles from one template (which all share the template's

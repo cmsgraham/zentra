@@ -102,50 +102,111 @@ export function HuddlesListView() {
         <div className="z-caption" style={{ color: 'var(--ink-text-muted)' }}>Loading…</div>
       ) : filtered.length === 0 ? (
         <EmptyState tab={tab} />
-      ) : (
+      ) : tab === 'active' ? (
+        // Live huddles are few and immediate — grouping them adds noise.
         <ul className="grid gap-2.5">
-          {filtered.map((f) => (
-            <li key={f.id}>
-              <Link
-                href={`/huddles/${f.id}`}
-                className="block p-4 rounded-xl transition-all"
-                style={{
-                  background: 'var(--ink-surface)',
-                  border: '1px solid var(--ink-border-subtle)',
-                  boxShadow: 'var(--ink-shadow-sm)',
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--ink-surface-hover)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--ink-surface)'; }}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <HuddleTypeBadge type={f.type} />
-                      <StatusDot status={f.status} />
-                    </div>
-                    <h3 className="text-[15px] font-semibold truncate" style={{ color: 'var(--ink-text)' }}>
-                      {f.title}
-                    </h3>
-                    {f.intention && (
-                      <p className="text-[13px] mt-1 line-clamp-2" style={{ color: 'var(--ink-text-secondary)' }}>
-                        {f.intention}
-                      </p>
-                    )}
-                  </div>
-                  <div className="text-right shrink-0">
-                    <div className="text-[12px]" style={{ color: 'var(--ink-text-muted)' }}>
-                      {formatDate(f.scheduledAt ?? f.createdAt)}
-                    </div>
-                    <div className="text-[11px] mt-1" style={{ color: 'var(--ink-text-faint)' }}>
-                      {f.participantCount ?? 0} {(f.participantCount ?? 0) === 1 ? 'person' : 'people'}
-                    </div>
-                  </div>
-                </div>
-              </Link>
-            </li>
-          ))}
+          {filtered.map((f) => <li key={f.id}><HuddleRow huddle={f} /></li>)}
         </ul>
+      ) : (
+        <GroupedByTemplate huddles={filtered} />
       )}
+    </div>
+  );
+}
+
+function HuddleRow({ huddle: f }: { huddle: Huddle }) {
+  return (
+    <Link
+      href={`/huddles/${f.id}`}
+      className="block p-4 rounded-xl transition-all"
+      style={{
+        background: 'var(--ink-surface)',
+        border: '1px solid var(--ink-border-subtle)',
+        boxShadow: 'var(--ink-shadow-sm)',
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--ink-surface-hover)'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--ink-surface)'; }}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 mb-1">
+            <HuddleTypeBadge type={f.type} />
+            <StatusDot status={f.status} />
+          </div>
+          <h3 className="text-[15px] font-semibold truncate" style={{ color: 'var(--ink-text)' }}>
+            {f.title}
+          </h3>
+          {f.intention && (
+            <p className="text-[13px] mt-1 line-clamp-2" style={{ color: 'var(--ink-text-secondary)' }}>
+              {f.intention}
+            </p>
+          )}
+        </div>
+        <div className="text-right shrink-0">
+          <div className="text-[12px]" style={{ color: 'var(--ink-text-muted)' }}>
+            {formatDate(f.scheduledAt ?? f.createdAt)}
+          </div>
+          <div className="text-[11px] mt-1" style={{ color: 'var(--ink-text-faint)' }}>
+            {f.participantCount ?? 0} {(f.participantCount ?? 0) === 1 ? 'person' : 'people'}
+          </div>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+// Recurring huddles started from one template all share the template's default
+// title, so a flat list of same-named rows is impossible to navigate. Group
+// each occurrence under its series instead, newest series first.
+function GroupedByTemplate({ huddles }: { huddles: Huddle[] }) {
+  const groups = new Map<string, { name: string | null; templateId: string | null; items: Huddle[] }>();
+  for (const h of huddles) {
+    const key = h.templateId ?? '__none__';
+    if (!groups.has(key)) {
+      groups.set(key, {
+        name: h.templateId ? (h.templateName ?? 'Untitled template') : null,
+        templateId: h.templateId,
+        items: [],
+      });
+    }
+    groups.get(key)!.items.push(h);
+  }
+
+  const when = (h: Huddle) => new Date(h.scheduledAt ?? h.createdAt).getTime();
+  const sorted = [...groups.values()].sort((a, b) => {
+    // Ungrouped one-offs sit last; otherwise most recently active series first.
+    if (a.templateId === null) return 1;
+    if (b.templateId === null) return -1;
+    return Math.max(...b.items.map(when)) - Math.max(...a.items.map(when));
+  });
+  for (const g of sorted) g.items.sort((a, b) => when(b) - when(a));
+
+  return (
+    <div className="space-y-6">
+      {sorted.map((g) => (
+        <section key={g.templateId ?? '__none__'}>
+          <div className="flex items-baseline justify-between gap-3 mb-2">
+            <h2 className="text-[13px] font-semibold" style={{ color: 'var(--ink-text)' }}>
+              {g.name ?? 'Not from a template'}
+              <span style={{ color: 'var(--ink-text-muted)', fontWeight: 450, marginLeft: 6 }}>
+                {g.items.length}
+              </span>
+            </h2>
+            {g.templateId && (
+              <Link
+                href={`/huddles/templates/${g.templateId}/report`}
+                className="text-[11.5px]"
+                style={{ color: 'var(--ink-accent)' }}
+              >
+                Series report →
+              </Link>
+            )}
+          </div>
+          <ul className="grid gap-2.5">
+            {g.items.map((f) => <li key={f.id}><HuddleRow huddle={f} /></li>)}
+          </ul>
+        </section>
+      ))}
     </div>
   );
 }
