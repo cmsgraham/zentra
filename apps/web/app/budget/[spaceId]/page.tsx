@@ -246,7 +246,6 @@ export default function BudgetSpacePage() {
 
   const [showAddPlanned, setShowAddPlanned] = useState(false);
   const [showAddUnplanned, setShowAddUnplanned] = useState(false);
-  const [showAddIncome, setShowAddIncome] = useState(false);
   const [showLibraryPicker, setShowLibraryPicker] = useState(false);
   const [showLibraryManager, setShowLibraryManager] = useState(false);
   const [showPeriods, setShowPeriods] = useState(false);
@@ -254,7 +253,6 @@ export default function BudgetSpacePage() {
 
   const [plannedForm, setPlannedForm] = useState<ItemFormState>(emptyItemForm());
   const [unplannedForm, setUnplannedForm] = useState<ItemFormState>(emptyItemForm());
-  const [incomeForm, setIncomeForm] = useState<ItemFormState>(emptyItemForm());
   const [templateForm, setTemplateForm] = useState<TemplateFormState>(emptyTemplateForm());
   const [editingTemplate, setEditingTemplate] = useState<ExpenseTemplate | null>(null);
   const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>([]);
@@ -291,7 +289,6 @@ export default function BudgetSpacePage() {
 
   const plannedItems = useMemo(() => sortPayments(items.filter((item) => item.kind !== 'income' && item.entryType === 'planned')), [items, sortPayments]);
   const unplannedItems = useMemo(() => sortPayments(items.filter((item) => item.kind !== 'income' && item.entryType === 'unplanned')), [items, sortPayments]);
-  const incomeItems = useMemo(() => sortPayments(items.filter((item) => item.kind === 'income')), [items, sortPayments]);
 
   // Totals in both currencies
   // Planned = all planned items, Current = only not paid
@@ -365,36 +362,6 @@ export default function BudgetSpacePage() {
       crc: plannedCurrentTotals.crc + unplannedCurrentTotals.crc,
     };
   }, [plannedCurrentTotals, unplannedCurrentTotals]);
-  // Income (all) and income still expected (not yet received).
-  const incomeTotals = useMemo(() => {
-    let usd = 0, crc = 0;
-    for (const item of incomeItems) {
-      const amt = Number(item.amount);
-      if (detectCurrency(amt) === 'USD') { usd += amt; crc += amt * exchangeRate; }
-      else { crc += amt; usd += amt / exchangeRate; }
-    }
-    return { usd, crc };
-  }, [incomeItems, exchangeRate]);
-  const incomeCurrentTotals = useMemo(() => {
-    let usd = 0, crc = 0;
-    for (const item of incomeItems) {
-      if (item.paid) continue;
-      const amt = Number(item.amount);
-      if (detectCurrency(amt) === 'USD') { usd += amt; crc += amt * exchangeRate; }
-      else { crc += amt; usd += amt / exchangeRate; }
-    }
-    return { usd, crc };
-  }, [incomeItems, exchangeRate]);
-  // Net = income − expenses. "All" uses planned amounts; "Remaining" uses only
-  // what is still unpaid/unreceived (real cash left to move this period).
-  const netTotals = useMemo(() => ({
-    usd: incomeTotals.usd - allTotals.usd,
-    crc: incomeTotals.crc - allTotals.crc,
-  }), [incomeTotals, allTotals]);
-  const netCurrentTotals = useMemo(() => ({
-    usd: incomeCurrentTotals.usd - allCurrentTotals.usd,
-    crc: incomeCurrentTotals.crc - allCurrentTotals.crc,
-  }), [incomeCurrentTotals, allCurrentTotals]);
   const activeLibrary = useMemo(() => library.filter((item) => item.active), [library]);
   const availableLibrary = useMemo(() => {
     const addedTemplateIds = new Set(items.map((item) => item.templateId).filter(Boolean));
@@ -569,33 +536,6 @@ export default function BudgetSpacePage() {
         setUnplannedForm(emptyItemForm());
         setShowAddUnplanned(false);
       }
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function createIncome(form: ItemFormState) {
-    if (!selectedPeriodId) return;
-    if (!form.name.trim() || !form.amount.trim()) return;
-
-    setSaving(true);
-    try {
-      await api(`/budget/periods/${selectedPeriodId}/items`, {
-        method: 'POST',
-        body: {
-          name: form.name.trim(),
-          amount: Number(form.amount),
-          entryType: 'planned',
-          kind: 'income',
-          paid: false,
-          dueDay: form.dueDay ? Number(form.dueDay) : null,
-          category: form.category.trim() || null,
-        },
-      });
-      await refreshPeriodState(selectedPeriodId);
-      await loadCategories();
-      setIncomeForm(emptyItemForm());
-      setShowAddIncome(false);
     } finally {
       setSaving(false);
     }
@@ -965,7 +905,7 @@ export default function BudgetSpacePage() {
             },
             {
               label: 'Clone previous period',
-              title: 'Copy income & expenses from the previous period (all unpaid)',
+              title: 'Copy expenses from the previous period (all unpaid)',
               onClick: clonePreviousPeriod,
             },
           ]}
@@ -973,7 +913,6 @@ export default function BudgetSpacePage() {
       )}
       <button className="z-btn" onClick={() => setShowAddPlanned(true)}>{isNoCadence ? 'Add future purchase' : 'Add one-time planned'}</button>
       {!isNoCadence && <button className="z-btn" onClick={() => setShowAddUnplanned(true)}>Add unplanned</button>}
-      {!isNoCadence && <button className="z-btn" onClick={() => setShowAddIncome(true)}>Add income</button>}
       <button className="z-btn" onClick={() => setShowLibraryPicker(true)}>Expense Library</button>
       {!isNoCadence && <button className="z-btn" onClick={() => setShowPeriods(true)}>Other periods</button>}
     </>
@@ -1045,20 +984,11 @@ export default function BudgetSpacePage() {
                     Remaining
                   </div>
 
-                  {(isNoCadence
-                    ? [
-                        { label: 'Planned', all: plannedTotals, remaining: plannedCurrentTotals, emphasis: false },
-                        { label: 'Unplanned', all: unplannedTotals, remaining: unplannedCurrentTotals, emphasis: false },
-                        { label: 'Total', all: allTotals, remaining: allCurrentTotals, emphasis: true },
-                      ]
-                    : [
-                        { label: 'Income', all: incomeTotals, remaining: incomeCurrentTotals, emphasis: false },
-                        { label: 'Planned', all: plannedTotals, remaining: plannedCurrentTotals, emphasis: false },
-                        { label: 'Unplanned', all: unplannedTotals, remaining: unplannedCurrentTotals, emphasis: false },
-                        { label: 'Expenses', all: allTotals, remaining: allCurrentTotals, emphasis: false },
-                        { label: 'Net', all: netTotals, remaining: netCurrentTotals, emphasis: true },
-                      ]
-                  ).map((row) => (
+                  {[
+                    { label: 'Planned', all: plannedTotals, remaining: plannedCurrentTotals, emphasis: false },
+                    { label: 'Unplanned', all: unplannedTotals, remaining: unplannedCurrentTotals, emphasis: false },
+                    { label: isNoCadence ? 'Total' : 'Expenses', all: allTotals, remaining: allCurrentTotals, emphasis: true },
+                  ].map((row) => (
                     <FinancialRow key={row.label} label={row.label} all={row.all} remaining={row.remaining} emphasis={row.emphasis} />
                   ))}
                 </div>
@@ -1162,25 +1092,6 @@ export default function BudgetSpacePage() {
                     ))}
                   </div>
                 </div>
-
-            {!isNoCadence && (
-              <section className="mt-4 rounded-2xl border" style={{ borderColor: 'var(--ink-border-subtle)', background: 'var(--ink-surface)' }}>
-                <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--ink-border-subtle)' }}>
-                  <h2 className="text-sm font-semibold">Income</h2>
-                  <span className="text-xs tabular-nums" style={{ color: 'var(--ink-text-secondary)' }}>₡{amountText(incomeTotals.crc)}</span>
-                </div>
-                <div className="p-2">
-                  {incomeItems.length === 0 && (
-                    <p className="px-2 py-4 text-center text-sm" style={{ color: 'var(--ink-text-faint)' }}>
-                      No income yet. Use “Add income” to record what comes in.
-                    </p>
-                  )}
-                  {incomeItems.map((item) => (
-                    <ItemRow key={item.id} item={item} exchangeRate={exchangeRate} onTogglePaid={togglePaid} onEdit={startEditItem} onDelete={removeItem} selected={selectedAmountIds.has(item.id)} onToggleSelect={toggleAmountSelect} />
-                  ))}
-                </div>
-              </section>
-            )}
 
             <div className={`mt-4 grid gap-4 ${isNoCadence ? '' : 'md:grid-cols-[minmax(0,1fr)_18rem]'}`}>
               <section className="rounded-2xl border" style={{ borderColor: 'var(--ink-border-subtle)', background: 'var(--ink-surface)' }}>
@@ -1366,21 +1277,6 @@ export default function BudgetSpacePage() {
         </SimpleModal>
       )}
 
-      {showAddIncome && (
-        <SimpleModal title="Add income" onClose={() => setShowAddIncome(false)}>
-          <ItemForm
-            value={incomeForm}
-            onChange={setIncomeForm}
-            onSubmit={() => createIncome(incomeForm)}
-            submitLabel="Add income"
-            saving={saving}
-            categories={categories}
-          />
-          <p className="mt-2 text-[11px]" style={{ color: 'var(--ink-text-muted)' }}>
-            Income starts unreceived. Check it off when the money arrives.
-          </p>
-        </SimpleModal>
-      )}
 
       {showEditSpace && (
         <SimpleModal title="Edit Space" onClose={() => setShowEditSpace(false)}>
