@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Pencil, Plus, Trash2, Calculator, Sparkles } from 'lucide-react';
 import AuthShell from '@/components/layout/AuthShell';
+import BudgetSubNav from '@/components/budget/BudgetSubNav';
 import { useIsMobile } from '@/lib/useIsMobile';
 import { api } from '@/lib/api-client';
 
@@ -161,14 +162,13 @@ export default function DeductionsLibraryPage() {
   return (
     <AuthShell>
       <div className={`mx-auto max-w-2xl ${isMobile ? 'px-4 pb-24 pt-3' : 'px-6 py-6'}`}>
+        <BudgetSubNav />
         <div className="mb-4 flex items-center justify-between">
-          <button className="z-btn z-btn-sm" onClick={() => router.back()}>← Back</button>
+          <h1 className="text-lg font-semibold tracking-tight" style={{ color: 'var(--ink-text)' }}>Deductions</h1>
           <button className="z-btn z-btn-sm inline-flex items-center gap-1" onClick={() => setCreating(true)}>
             <Plus size={12} /> New deduction
           </button>
         </div>
-
-        <h1 className="text-lg font-semibold tracking-tight" style={{ color: 'var(--ink-text)' }}>Deductions</h1>
         <p className="mt-0.5 text-xs" style={{ color: 'var(--ink-text-muted)' }}>
           Your library of recurring deductions. Pick them inside Monthly Planning to apply against your income.
         </p>

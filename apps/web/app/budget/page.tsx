@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import AuthShell from '@/components/layout/AuthShell';
 import FloatingActionButton from '@/components/mobile/FloatingActionButton';
+import BudgetSubNav from '@/components/budget/BudgetSubNav';
 import { useIsMobile } from '@/lib/useIsMobile';
 import { type BudgetCadence, useBudgetStore } from '@/lib/useBudgetStore';
 
@@ -66,23 +67,16 @@ export default function BudgetHomePage() {
   return (
     <AuthShell>
       <div className={`mx-auto max-w-3xl ${isMobile ? 'px-4 pb-24 pt-3' : 'px-6 py-6'}`}>
+        <BudgetSubNav />
         {!isMobile && (
           <div className="mb-6 flex items-center justify-between">
             <div>
               <h1 className="z-page-title">Budget</h1>
               <p className="z-caption mt-1">Quiet planning for pay periods and future purchases.</p>
             </div>
-            <div className="flex items-center gap-2">
-              <button className="z-btn" onClick={() => router.push('/budget/monthly')}>
-                Monthly Planning
-              </button>
-              <button className="z-btn" onClick={() => router.push('/budget/deductions')}>
-                Deductions
-              </button>
-              <button className="z-btn z-btn-primary" onClick={() => setShowCreate(true)}>
-                New Space
-              </button>
-            </div>
+            <button className="z-btn z-btn-primary" onClick={() => setShowCreate(true)}>
+              New Space
+            </button>
           </div>
         )}
 

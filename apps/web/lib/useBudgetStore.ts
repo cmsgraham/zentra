@@ -95,6 +95,7 @@ interface BudgetStoreState {
   loadSpaces: () => Promise<void>;
   createSpace: (input: { name: string; cadence: BudgetCadence }) => Promise<BudgetSpace>;
   deleteSpace: (spaceId: string) => Promise<void>;
+  setIncludeInMonthly: (spaceId: string, includeInMonthly: boolean) => Promise<void>;
 }
 
 export const useBudgetStore = create<BudgetStoreState>((set, get) => ({
@@ -123,5 +124,14 @@ export const useBudgetStore = create<BudgetStoreState>((set, get) => ({
   deleteSpace: async (spaceId) => {
     await api(`/budget/spaces/${spaceId}`, { method: 'DELETE' });
     set((state) => ({ spaces: state.spaces.filter((s) => s.id !== spaceId) }));
+  },
+
+  // Lets Monthly Planning flip a space's visibility there directly, instead
+  // of requiring a trip into the space's Edit modal to find the checkbox.
+  setIncludeInMonthly: async (spaceId, includeInMonthly) => {
+    await api(`/budget/spaces/${spaceId}`, { method: 'PUT', body: { includeInMonthly } });
+    set((state) => ({
+      spaces: state.spaces.map((s) => (s.id === spaceId ? { ...s, includeInMonthly } : s)),
+    }));
   },
 }));

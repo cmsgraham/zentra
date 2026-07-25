@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { Check, Download, Pencil, RefreshCw, Trash2 } from 'lucide-react';
+import { Check, ChevronDown, Download, Pencil, RefreshCw, Trash2 } from 'lucide-react';
 import AuthShell from '@/components/layout/AuthShell';
 import { api } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
@@ -954,30 +954,27 @@ export default function BudgetSpacePage() {
   const actionButtons = (
     <>
       {!isNoCadence && (
-        <button
-          className="z-btn z-btn-primary"
-          onClick={buildBudgetFromLibrary}
+        <ActionMenu
+          label="Populate period"
           disabled={saving || !selectedPeriodId}
-          title="Add applicable items from your Expense Library to this period"
-        >
-          Build Budget
-        </button>
+          items={[
+            {
+              label: 'Build from library rules',
+              title: 'Add applicable items from your Expense Library to this period',
+              onClick: buildBudgetFromLibrary,
+            },
+            {
+              label: 'Clone previous period',
+              title: 'Copy income & expenses from the previous period (all unpaid)',
+              onClick: clonePreviousPeriod,
+            },
+          ]}
+        />
       )}
-      {!isNoCadence && (
-        <button
-          className="z-btn"
-          onClick={clonePreviousPeriod}
-          disabled={saving || !selectedPeriodId}
-          title="Copy income & expenses from the previous period (all unpaid)"
-        >
-          Clone previous period
-        </button>
-      )}
-      <button className="z-btn" onClick={() => setShowLibraryPicker(true)}>Add from Expense Library</button>
       <button className="z-btn" onClick={() => setShowAddPlanned(true)}>{isNoCadence ? 'Add future purchase' : 'Add one-time planned'}</button>
       {!isNoCadence && <button className="z-btn" onClick={() => setShowAddUnplanned(true)}>Add unplanned</button>}
       {!isNoCadence && <button className="z-btn" onClick={() => setShowAddIncome(true)}>Add income</button>}
-      <button className="z-btn" onClick={() => setShowLibraryManager(true)}>Open Expense Library</button>
+      <button className="z-btn" onClick={() => setShowLibraryPicker(true)}>Expense Library</button>
       {!isNoCadence && <button className="z-btn" onClick={() => setShowPeriods(true)}>Other periods</button>}
     </>
   );
@@ -1407,14 +1404,14 @@ export default function BudgetSpacePage() {
                   setSpaceForm({ ...spaceForm, cadence: parsed.cadence, halfIndex: parsed.halfIndex });
                 }}
               >
-                <option value="semi_monthly_1">Semi-monthly 1-15</option>
-                <option value="semi_monthly_2">Semi-monthly 16-end</option>
+                <option value="semi_monthly_1">Semi-monthly · Quincena 1 (1-15)</option>
+                <option value="semi_monthly_2">Semi-monthly · Quincena 2 (16-end)</option>
                 <option value="monthly">Monthly</option>
                 <option value="none">No cadence (future purchases)</option>
               </select>
               {spaceForm.cadence === 'semi_monthly' && (
                 <p className="mt-1 text-[11px]" style={{ color: 'var(--ink-text-muted)' }}>
-                  Selects the active half of the current month.
+                  Selects which quincena (pay period) of the current month is active.
                 </p>
               )}
             </div>
@@ -1456,7 +1453,20 @@ export default function BudgetSpacePage() {
       )}
 
       {showLibraryPicker && (
-        <SimpleModal title="Add from Expense Library" onClose={closeLibraryPicker}>
+        <SimpleModal title="Expense Library" onClose={closeLibraryPicker}>
+          <div className="mb-3 flex justify-end">
+            <button
+              type="button"
+              className="text-xs underline-offset-2 hover:underline"
+              style={{ color: 'var(--ink-text-muted)' }}
+              onClick={() => {
+                closeLibraryPicker();
+                setShowLibraryManager(true);
+              }}
+            >
+              Manage library →
+            </button>
+          </div>
           <div className="space-y-2">
             {activeLibrary.length === 0 && (
               <p className="text-sm" style={{ color: 'var(--ink-text-muted)' }}>
@@ -1550,6 +1560,19 @@ export default function BudgetSpacePage() {
 
       {showLibraryManager && (
         <SimpleModal title="Expense Library" onClose={() => setShowLibraryManager(false)}>
+          <div className="mb-3 flex justify-end">
+            <button
+              type="button"
+              className="text-xs underline-offset-2 hover:underline"
+              style={{ color: 'var(--ink-text-muted)' }}
+              onClick={() => {
+                setShowLibraryManager(false);
+                setShowLibraryPicker(true);
+              }}
+            >
+              Add to period →
+            </button>
+          </div>
           <div className="space-y-3">
             <div className="rounded-lg border p-3" style={{ borderColor: 'var(--ink-border-subtle)' }}>
               <p className="mb-2 text-xs font-medium">{editingTemplate ? 'Edit item' : 'New item'}</p>
@@ -1910,6 +1933,77 @@ function TemplateForm({
           <option value="manual">manual</option>
         </select>
       </div>
+    </div>
+  );
+}
+
+// Small "+" style menu used to group actions that share one intent (e.g. the
+// several ways to populate a period) behind a single button instead of
+// spreading them across the toolbar as peer buttons.
+function ActionMenu({
+  label,
+  items,
+  disabled,
+}: {
+  label: string;
+  items: { label: string; title?: string; onClick: () => void }[];
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    document.addEventListener('mousedown', onDocClick);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative inline-block" ref={containerRef}>
+      <button
+        type="button"
+        className="z-btn z-btn-primary inline-flex items-center gap-1"
+        onClick={() => setOpen((v) => !v)}
+        disabled={disabled}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        {label}
+        <ChevronDown size={12} />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute left-0 z-40 mt-1 min-w-[220px] rounded-lg border p-1"
+          style={{ borderColor: 'var(--ink-border-subtle)', background: 'var(--ink-surface)', boxShadow: 'var(--ink-shadow-sm)' }}
+        >
+          {items.map((item) => (
+            <button
+              key={item.label}
+              role="menuitem"
+              type="button"
+              title={item.title}
+              className="block w-full rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--ink-subtle)]"
+              onClick={() => {
+                setOpen(false);
+                item.onClick();
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

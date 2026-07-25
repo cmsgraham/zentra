@@ -3,9 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import AuthShell from '@/components/layout/AuthShell';
+import BudgetSubNav from '@/components/budget/BudgetSubNav';
 import { useIsMobile } from '@/lib/useIsMobile';
+import { useBudgetStore } from '@/lib/useBudgetStore';
 import { api } from '@/lib/api-client';
-import { Camera, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, FileText, Pencil, Plus, Trash2, X } from 'lucide-react';
+import { Camera, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Pencil, Plus, Trash2, X } from 'lucide-react';
 
 interface MonthlyEntry {
   id: string;
@@ -127,6 +129,14 @@ export default function MonthlyPlanningPage() {
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [data, setData] = useState<MonthlyResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  // Full space list (not just the ones already included) so we can surface
+  // spaces that aren't showing up here yet — "include in monthly" used to be
+  // a checkbox buried in each space's Edit modal, invisible from this page.
+  const allSpaces = useBudgetStore((s) => s.spaces);
+  const loadAllSpaces = useBudgetStore((s) => s.loadSpaces);
+  const setIncludeInMonthly = useBudgetStore((s) => s.setIncludeInMonthly);
+  const [togglingSpaceId, setTogglingSpaceId] = useState<string | null>(null);
+  const [showExcludedSpaces, setShowExcludedSpaces] = useState(false);
   const [showAdd, setShowAdd] = useState<null | 'income' | 'deduction'>(null);
   const [addLabel, setAddLabel] = useState('');
   const [addAmount, setAddAmount] = useState('');
@@ -179,6 +189,17 @@ export default function MonthlyPlanningPage() {
   }, [year, month]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadAllSpaces(); }, [loadAllSpaces]);
+
+  async function toggleSpaceInMonthly(spaceId: string, include: boolean) {
+    setTogglingSpaceId(spaceId);
+    try {
+      await setIncludeInMonthly(spaceId, include);
+      await load();
+    } finally {
+      setTogglingSpaceId(null);
+    }
+  }
 
   // Sync the cash-flow inputs whenever fresh data arrives so edits made
   // elsewhere (or a month switch) are reflected in the reconciliation fields.
@@ -363,6 +384,15 @@ export default function MonthlyPlanningPage() {
     [deductions],
   );
 
+  // Spaces that exist but aren't feeding into this month's totals — the
+  // other half of the "Include in Monthly Planning" toggle, so turning a
+  // space on or off no longer requires leaving this page.
+  const includedSpaceIds = useMemo(() => new Set((data?.spaces ?? []).map((s) => s.id)), [data]);
+  const excludedSpaces = useMemo(
+    () => allSpaces.filter((s) => !includedSpaceIds.has(s.id) && s.includeInMonthly !== true),
+    [allSpaces, includedSpaceIds],
+  );
+
   // Previewed totals — same math as the server, but filtered by what-if toggles.
   // Note: this is a presentation-only preview; it does NOT recompute garnishment
   // because that requires backend rules. Toggling a statutory deduction off will
@@ -444,31 +474,18 @@ export default function MonthlyPlanningPage() {
   return (
     <AuthShell>
       <div className={`mx-auto max-w-2xl ${isMobile ? 'px-4 pb-24 pt-3' : 'px-6 py-6'}`}>
-        <div className="mb-4 flex items-center justify-between">
-          <button className="z-btn z-btn-sm" onClick={() => router.push('/budget')}>← Budget</button>
+        <BudgetSubNav />
+        <div className="mb-1 flex items-center justify-between">
+          <h1 className="text-lg font-semibold tracking-tight" style={{ color: 'var(--ink-text)' }}>Monthly Planning</h1>
           <div className="flex items-center gap-2">
             <button className="z-btn z-btn-sm" aria-label="Previous month" onClick={() => shiftMonth(-1)}>
               <ChevronLeft size={14} />
             </button>
-            <div className="min-w-[140px] text-center text-sm font-medium" style={{ color: 'var(--ink-text)' }}>
+            <div className="min-w-[110px] text-center text-sm font-medium" style={{ color: 'var(--ink-text)' }}>
               {MONTH_NAMES[month - 1]} {year}
             </div>
             <button className="z-btn z-btn-sm" aria-label="Next month" onClick={() => shiftMonth(1)}>
               <ChevronRight size={14} />
-            </button>
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between">
-          <h1 className="text-lg font-semibold tracking-tight" style={{ color: 'var(--ink-text)' }}>Monthly Planning</h1>
-          <div className="flex items-center gap-2">
-            <button
-              className="z-btn z-btn-sm inline-flex items-center gap-1"
-              onClick={() => router.push('/budget/reports')}
-              aria-label="Reports"
-              title="Reports"
-            >
-              <FileText size={12} /> Reports
             </button>
             <button
               className="z-btn z-btn-sm inline-flex items-center gap-1"
@@ -693,7 +710,7 @@ export default function MonthlyPlanningPage() {
         {/* Spaces */}
         <Section title="Budget Spaces" total={preview.expenseTotal}>
           {(!data || data.spaces.length === 0) && (
-            <Empty text="No spaces tagged for monthly planning. Open a space → Edit → check 'Include in Monthly Planning'." />
+            <Empty text={excludedSpaces.length > 0 ? 'No spaces included yet — add one below.' : 'No budget spaces yet.'} />
           )}
           {data?.spaces.map((s) => {
             const spaceDisabled = !!disabledSpaces[s.id];
@@ -743,6 +760,15 @@ export default function MonthlyPlanningPage() {
                   >
                     Open
                   </button>
+                  <button
+                    className="z-btn z-btn-sm"
+                    onClick={() => toggleSpaceInMonthly(s.id, false)}
+                    disabled={togglingSpaceId === s.id}
+                    aria-label={`Remove ${s.name} from Monthly Planning`}
+                    title="Stop including this space's totals here"
+                  >
+                    <X size={12} />
+                  </button>
                 </div>
                 {expanded && (
                   <div className="border-t" style={{ borderColor: 'var(--ink-border-subtle)' }}>
@@ -789,6 +815,35 @@ export default function MonthlyPlanningPage() {
               </div>
             );
           })}
+          {excludedSpaces.length > 0 && (
+            <div className="border-t px-3 py-2" style={{ borderColor: 'var(--ink-border-subtle)' }}>
+              <button
+                type="button"
+                className="text-xs underline-offset-2 hover:underline"
+                style={{ color: 'var(--ink-text-muted)' }}
+                onClick={() => setShowExcludedSpaces((v) => !v)}
+                aria-expanded={showExcludedSpaces}
+              >
+                {excludedSpaces.length} other space{excludedSpaces.length === 1 ? '' : 's'} not included {showExcludedSpaces ? '▴' : '▾'}
+              </button>
+              {showExcludedSpaces && (
+                <div className="mt-2 space-y-1.5">
+                  {excludedSpaces.map((s) => (
+                    <div key={s.id} className="flex items-center justify-between gap-2">
+                      <span className="truncate text-xs" style={{ color: 'var(--ink-text-secondary)' }}>{s.name}</span>
+                      <button
+                        className="z-btn z-btn-sm"
+                        onClick={() => toggleSpaceInMonthly(s.id, true)}
+                        disabled={togglingSpaceId === s.id}
+                      >
+                        {togglingSpaceId === s.id ? 'Adding…' : 'Include'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </Section>
       </div>
 
@@ -1254,10 +1309,10 @@ function PayPeriodPicker({
   onChange: (v: 1 | 2 | null) => void;
   size?: 'sm' | 'md';
 }) {
-  const opts: { v: 1 | 2 | null; label: string }[] = [
-    { v: 1, label: 'Q1' },
-    { v: 2, label: 'Q2' },
-    { v: null, label: 'Both' },
+  const opts: { v: 1 | 2 | null; label: string; title: string }[] = [
+    { v: 1, label: 'Q1', title: 'Quincena 1 (1st–15th)' },
+    { v: 2, label: 'Q2', title: 'Quincena 2 (16th–end)' },
+    { v: null, label: 'Both', title: 'Split evenly across both quincenas' },
   ];
   const pad = size === 'sm' ? 'px-1.5 py-0.5 text-[11px]' : 'px-2.5 py-1 text-xs';
   return (
@@ -1270,6 +1325,7 @@ function PayPeriodPicker({
           className={`rounded-md font-medium ${pad} ${value === o.v ? 'bg-white shadow-sm' : ''}`}
           style={{ color: value === o.v ? 'var(--ink-text)' : 'var(--ink-text-muted)' }}
           aria-pressed={value === o.v}
+          title={o.title}
         >
           {o.label}
         </button>

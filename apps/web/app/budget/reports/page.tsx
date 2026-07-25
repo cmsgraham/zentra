@@ -1,8 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import AuthShell from '@/components/layout/AuthShell';
+import BudgetSubNav from '@/components/budget/BudgetSubNav';
 import { useIsMobile } from '@/lib/useIsMobile';
 import { api } from '@/lib/api-client';
 import { Trash2 } from 'lucide-react';
@@ -30,7 +30,6 @@ function formatCRC(n: number): string {
 }
 
 export default function ReportsPage() {
-  const router = useRouter();
   const isMobile = useIsMobile();
   const [list, setList] = useState<SnapshotListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -72,9 +71,7 @@ export default function ReportsPage() {
   return (
     <AuthShell>
       <div className={`mx-auto max-w-2xl ${isMobile ? 'px-4 pb-24 pt-3' : 'px-6 py-6'}`}>
-        <div className="mb-4 flex items-center justify-between">
-          <button className="z-btn z-btn-sm" onClick={() => router.push('/budget/monthly')}>← Monthly</button>
-        </div>
+        <BudgetSubNav />
         <h1 className="text-lg font-semibold tracking-tight" style={{ color: 'var(--ink-text)' }}>Budget Reports</h1>
         <p className="mt-0.5 text-xs" style={{ color: 'var(--ink-text-muted)' }}>
           Snapshots of past months. Use the “Snapshot” button on Monthly Planning to capture the current month.
