@@ -252,6 +252,37 @@ async function invalidateSwApiCache(path: string, isGet: boolean): Promise<void>
   } catch {}
 }
 
+/**
+ * Fetches every page of a paginated list endpoint.
+ *
+ * List endpoints page on `page`/`pageSize` (pageSize defaults to 20, max 100).
+ * Passing an unrecognised `limit` did nothing, so callers asking for
+ * `?limit=200` silently received only the first 20 rows — a board with more
+ * than 20 tasks simply hid the rest with no indication anything was missing.
+ * Requesting a large pageSize alone would only move that cliff to 100, so walk
+ * the pages until `total` is satisfied.
+ */
+export async function apiListAll<T = unknown>(path: string): Promise<T[]> {
+  const items: T[] = [];
+  let page = 1;
+  // Bounded so a malformed `total` can never spin forever.
+  for (let guard = 0; guard < 50; guard++) {
+    const sep = path.includes('?') ? '&' : '?';
+    const data = await api<{
+      items?: T[];
+      pagination?: { page: number; pageSize: number; total: number };
+    }>(`${path}${sep}page=${page}&pageSize=100`);
+
+    const batch = data.items ?? [];
+    items.push(...batch);
+
+    const total = data.pagination?.total;
+    if (batch.length === 0 || total == null || items.length >= total) break;
+    page += 1;
+  }
+  return items;
+}
+
 export class ApiError extends Error {
   public offline: boolean;
   constructor(public status: number, message: string, opts?: { offline?: boolean }) {

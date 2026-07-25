@@ -13,7 +13,7 @@ import BulkEditModal from '@/components/tasks/BulkEditModal';
 import FloatingActionButton from '@/components/mobile/FloatingActionButton';
 import WorkspaceMembersModal from '@/components/board/WorkspaceMembersModal';
 import { useIsMobile } from '@/lib/useIsMobile';
-import { api } from '@/lib/api-client';
+import { api, apiListAll } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import type { TaskData } from '@/components/tasks/TaskCard';
 
@@ -151,8 +151,8 @@ export default function WorkspaceBoardPage() {
   );
 
   const loadTasks = useCallback(async () => {
-    const data = await api<{ items: TaskData[] }>(`/workspaces/${workspaceId}/tasks?limit=200&archived=false`);
-    setTasks(data.items);
+    const items = await apiListAll<TaskData>(`/workspaces/${workspaceId}/tasks?archived=false`);
+    setTasks(items);
   }, [workspaceId]);
 
   const loadMembers = useCallback(async () => {

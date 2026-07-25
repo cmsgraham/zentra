@@ -7,7 +7,7 @@ import WorkspaceSidebar from '@/components/layout/WorkspaceSidebar';
 import TaskCard, { type TaskData } from '@/components/tasks/TaskCard';
 import TaskDetailDrawer from '@/components/tasks/TaskDetailDrawer';
 import { useIsMobile } from '@/lib/useIsMobile';
-import { api } from '@/lib/api-client';
+import { api, apiListAll } from '@/lib/api-client';
 
 export default function ArchivePage() {
   const params = useParams();
@@ -17,8 +17,8 @@ export default function ArchivePage() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
   const loadTasks = useCallback(async () => {
-    const data = await api<{ items: TaskData[] }>(`/workspaces/${workspaceId}/tasks?archived=true&limit=200`);
-    setTasks(data.items);
+    const items = await apiListAll<TaskData>(`/workspaces/${workspaceId}/tasks?archived=true`);
+    setTasks(items);
   }, [workspaceId]);
 
   useEffect(() => { loadTasks(); }, [loadTasks]);
