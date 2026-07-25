@@ -2321,23 +2321,38 @@ export default async function huddleRoutes(app: FastifyInstance) {
       );
     }
 
-    // Topics from the template.
+    // Unresolved business from last time comes in FIRST, before the template's
+    // standing agenda is seeded. A template topic and the still-open copy of
+    // that same topic carried from the previous huddle are the same agenda
+    // item, so seeding both produced a visible duplicate — one fresh, one
+    // marked deferred. The carried row wins because it holds the accumulated
+    // history (deferral count, owner, approver, context); a fresh seed would
+    // silently drop all of it.
+    await carryForwardTopics(app.pg, huddle.id, huddle);
+
+    const carried = await app.pg.query(
+      `SELECT lower(btrim(title)) AS key, COALESCE(MAX(sort_order), -1) AS max_order
+         FROM huddle_topics WHERE huddle_id = $1 GROUP BY lower(btrim(title))`,
+      [huddle.id],
+    );
+    const alreadyPresent = new Set<string>(carried.rows.map((r: any) => r.key));
+    let order = carried.rows.reduce(
+      (m: number, r: any) => Math.max(m, Number(r.max_order)), -1,
+    ) + 1;
+
+    // Topics from the template, minus anything carry-forward already supplied.
     const tplTopics: { title: string; context?: string | null }[] = Array.isArray(tpl.default_topics)
       ? tpl.default_topics
       : [];
-    let order = 0;
     for (const t of tplTopics) {
       if (!t || !t.title) continue;
+      if (alreadyPresent.has(t.title.trim().toLowerCase())) continue;
       await app.pg.query(
         `INSERT INTO huddle_topics (huddle_id, title, context, sort_order)
          VALUES ($1, $2, $3, $4)`,
         [huddle.id, t.title, t.context ?? null, order++],
       );
     }
-
-    // Then anything still unresolved from the previous huddle in this series,
-    // ordered after the template's own topics.
-    await carryForwardTopics(app.pg, huddle.id, huddle);
 
     return reply.status(201).send({ huddle: formatHuddle(huddle) });
   });
