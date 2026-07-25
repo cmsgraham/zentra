@@ -2,7 +2,9 @@ export type HuddleType = 'team' | 'personal';
 export type HuddleStatus = 'draft' | 'active' | 'closed';
 export type HuddleParticipantRole = 'host' | 'participant';
 export type HuddleAttendanceStatus = 'invited' | 'present' | 'late' | 'virtual' | 'excused';
-export type HuddleTopicStatus = 'open' | 'decided' | 'parked';
+export type HuddleTopicStatus = 'open' | 'closed' | 'cancelled';
+export type HuddleTopicOpenReason = 'deferred' | 'needs_decision' | null;
+export type HuddleTopicHorizon = 'short_term' | 'long_term';
 export type HuddleIntentionStatus = 'open' | 'done' | 'cancelled';
 export type HuddleFollowupStatus = 'open' | 'done' | 'carried_forward';
 
@@ -18,6 +20,7 @@ export interface Huddle {
   startedAt: string | null;
   endedAt: string | null;
   summary: string | null;
+  templateId?: string | null;
   emailSummaryOnClose?: boolean;
   summaryEmailedAt?: string | null;
   createdAt: string;
@@ -43,6 +46,7 @@ export interface HuddleSignal {
   text: string;
   whyItMatters: string | null;
   promotedToTopic: boolean;
+  sortOrder: number;
   createdAt: string;
   authorName?: string;
 }
@@ -54,6 +58,17 @@ export interface HuddleTopic {
   context: string | null;
   sortOrder: number;
   status: HuddleTopicStatus;
+  openReason: HuddleTopicOpenReason;
+  horizon: HuddleTopicHorizon;
+  deferCount: number;
+  ownerUserId: string | null;
+  ownerName: string | null;
+  approverUserId: string | null;
+  approverName: string | null;
+  parentTopicId: string | null;
+  carriedFromTopicId: string | null;
+  closedAt: string | null;
+  closedByUserId: string | null;
   sourceSignalId: string | null;
   createdAt: string;
   decisions?: HuddleDecision[];
@@ -76,6 +91,7 @@ export interface HuddleIntention {
   softDueText: string | null;
   linkedTaskId: string | null;
   status: HuddleIntentionStatus;
+  sortOrder: number;
   createdAt: string;
   ownerName?: string;
 }

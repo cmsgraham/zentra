@@ -20,6 +20,9 @@ const createHuddleSchema = z.object({
   scheduledAt: z.string().datetime().optional().nullable(),
   participantUserIds: z.array(z.string().uuid()).optional().default([]),
   externalAttendees: z.array(externalAttendeeSchema).optional().default([]),
+  // Records which template this huddle was started from, so a recurring
+  // meeting can be reported on as a series.
+  templateId: z.string().uuid().optional().nullable(),
 });
 
 const updateHuddleSchema = z.object({
@@ -72,10 +75,15 @@ const updateDecisionSchema = z.object({
   details: detailsField,
 });
 
+const topicOpenReason = z.enum(['deferred', 'needs_decision']);
+const topicHorizon = z.enum(['short_term', 'long_term']);
+
 const createTopicSchema = z.object({
   title: z.string().min(1).max(300),
   context: z.string().max(2000).optional().nullable(),
   sourceSignalId: z.string().uuid().optional().nullable(),
+  parentTopicId: z.string().uuid().optional().nullable(),
+  ownerUserId: z.string().uuid().optional().nullable(),
   details: detailsField,
 });
 
@@ -83,9 +91,29 @@ const updateTopicSchema = z.object({
   title: z.string().min(1).max(300).optional(),
   context: z.string().max(2000).nullable().optional(),
   sortOrder: z.number().int().optional(),
-  status: z.enum(['open', 'decided', 'parked']).optional(),
+  status: z.enum(['open', 'closed', 'cancelled']).optional(),
+  openReason: topicOpenReason.nullable().optional(),
+  horizon: topicHorizon.optional(),
+  ownerUserId: z.string().uuid().nullable().optional(),
+  approverUserId: z.string().uuid().nullable().optional(),
+  parentTopicId: z.string().uuid().nullable().optional(),
   details: detailsField,
 });
+
+// Body for the explicit lifecycle transitions below.
+const deferTopicSchema = z.object({
+  horizon: topicHorizon.optional(),
+}).optional().default({});
+
+const needsDecisionSchema = z.object({
+  approverUserId: z.string().uuid().nullable().optional(),
+  ownerUserId: z.string().uuid().nullable().optional(),
+}).optional().default({});
+
+const closeTopicSchema = z.object({
+  // 'cancelled' = no longer relevant, distinct from resolved.
+  outcome: z.enum(['closed', 'cancelled']).optional().default('closed'),
+}).optional().default({});
 
 const decideTopicSchema = z.object({
   decisionText: z.string().min(1).max(1000),
@@ -129,6 +157,10 @@ const createNoteSchema = z.object({
   text: z.string().min(1).max(4000),
 });
 
+const reorderSchema = z.object({
+  orderedIds: z.array(z.string().uuid()).min(1),
+});
+
 // ─── Formatters ───────────────────────────────────────────────────────────
 
 function formatHuddle(r: any) {
@@ -144,6 +176,7 @@ function formatHuddle(r: any) {
     startedAt: r.started_at,
     endedAt: r.ended_at,
     summary: r.summary,
+    templateId: r.template_id ?? null,
     emailSummaryOnClose: r.email_summary_on_close ?? false,
     summaryEmailedAt: r.summary_emailed_at ?? null,
     createdAt: r.created_at,
@@ -175,6 +208,7 @@ function formatSignal(r: any) {
     whyItMatters: r.why_it_matters,
     details: r.details ?? null,
     promotedToTopic: r.promoted_to_topic,
+    sortOrder: r.sort_order ?? 0,
     createdAt: r.created_at,
     authorName: r.author_name ?? undefined,
   };
@@ -188,6 +222,17 @@ function formatTopic(r: any) {
     details: r.details ?? null,
     sortOrder: r.sort_order,
     status: r.status,
+    openReason: r.open_reason ?? null,
+    horizon: r.horizon ?? 'short_term',
+    deferCount: r.defer_count ?? 0,
+    ownerUserId: r.owner_user_id ?? null,
+    ownerName: r.owner_name ?? null,
+    approverUserId: r.approver_user_id ?? null,
+    approverName: r.approver_name ?? null,
+    parentTopicId: r.parent_topic_id ?? null,
+    carriedFromTopicId: r.carried_from_topic_id ?? null,
+    closedAt: r.closed_at ?? null,
+    closedByUserId: r.closed_by_user_id ?? null,
     sourceSignalId: r.source_signal_id,
     createdAt: r.created_at,
   };
@@ -213,6 +258,7 @@ function formatIntention(r: any) {
     details: r.details ?? null,
     linkedTaskId: r.linked_task_id,
     status: r.status,
+    sortOrder: r.sort_order ?? 0,
     createdAt: r.created_at,
     ownerName: r.owner_name ?? undefined,
   };
@@ -360,11 +406,18 @@ function buildMinuteMarkdown(input: {
   if (input.topics.length) {
     lines.push('## Focus topics & decisions');
     for (const t of input.topics) {
-      const statusTag = t.status && t.status !== 'open' ? ` _(${t.status})_` : '';
-      lines.push(`- **${t.title}**${statusTag}`);
+      const decs = input.decisionsByTopic.get(t.id) ?? [];
+      const label =
+        t.status === 'cancelled' ? 'cancelled'
+        : t.status === 'closed' ? (decs.length > 0 ? 'decided' : 'closed')
+        : t.open_reason === 'needs_decision' ? 'needs a decision'
+        : t.open_reason === 'deferred' ? `deferred${t.defer_count > 1 ? ` ×${t.defer_count}` : ''}`
+        : null;
+      const statusTag = label ? ` _(${label})_` : '';
+      const owner = t.owner_name ? ` — _${t.owner_name}_` : '';
+      lines.push(`- **${t.title}**${statusTag}${owner}`);
       if (t.context) lines.push(`  ${t.context}`);
       if (t.details) lines.push(ind(t.details));
-      const decs = input.decisionsByTopic.get(t.id) ?? [];
       for (const d of decs) {
         const owner = d.owner_name ? ` — _${d.owner_name}_` : '';
         lines.push(`  - ✓ ${d.decision_text}${owner}`);
@@ -478,7 +531,7 @@ async function sendHuddleSummaryToParticipants(
        FROM huddle_intentions i
        LEFT JOIN users u ON u.id = i.owner_user_id
        WHERE i.huddle_id = $1
-       ORDER BY i.created_at ASC`,
+       ORDER BY i.sort_order ASC, i.created_at ASC`,
       [huddleId],
     ),
     app.pg.query(
@@ -640,10 +693,13 @@ export default async function huddleRoutes(app: FastifyInstance) {
       await client.query('BEGIN');
 
       const huddleRes = await client.query(
-        `INSERT INTO huddles (workspace_id, type, title, intention, host_user_id, scheduled_at, status)
-         VALUES ($1, $2, $3, $4, $5, $6, 'draft')
+        `INSERT INTO huddles (workspace_id, type, title, intention, host_user_id, scheduled_at, status, template_id)
+         VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7)
          RETURNING *`,
-        [body.workspaceId ?? null, body.type, body.title, body.intention ?? null, userId, body.scheduledAt ?? null],
+        [
+          body.workspaceId ?? null, body.type, body.title, body.intention ?? null,
+          userId, body.scheduledAt ?? null, body.templateId ?? null,
+        ],
       );
       const huddle = huddleRes.rows[0];
 
@@ -725,11 +781,16 @@ export default async function huddleRoutes(app: FastifyInstance) {
          FROM huddle_signals s
          LEFT JOIN users u ON u.id = s.author_user_id
          WHERE s.huddle_id = $1
-         ORDER BY s.created_at ASC`,
+         ORDER BY s.sort_order ASC, s.created_at ASC`,
         [id],
       ),
       app.pg.query(
-        `SELECT * FROM huddle_topics WHERE huddle_id = $1 ORDER BY sort_order ASC, created_at ASC`,
+        `SELECT t.*, uo.name AS owner_name, ua.name AS approver_name
+         FROM huddle_topics t
+         LEFT JOIN users uo ON uo.id = t.owner_user_id
+         LEFT JOIN users ua ON ua.id = t.approver_user_id
+         WHERE t.huddle_id = $1
+         ORDER BY t.sort_order ASC, t.created_at ASC`,
         [id],
       ),
       app.pg.query(
@@ -746,7 +807,7 @@ export default async function huddleRoutes(app: FastifyInstance) {
          FROM huddle_intentions i
          LEFT JOIN users u ON u.id = i.owner_user_id
          WHERE i.huddle_id = $1
-         ORDER BY i.created_at ASC`,
+         ORDER BY i.sort_order ASC, i.created_at ASC`,
         [id],
       ),
       app.pg.query(
@@ -886,11 +947,15 @@ export default async function huddleRoutes(app: FastifyInstance) {
          FROM huddle_signals s
          LEFT JOIN users u ON u.id = s.author_user_id
          WHERE s.huddle_id = $1
-         ORDER BY s.created_at ASC`,
+         ORDER BY s.sort_order ASC, s.created_at ASC`,
         [id],
       ),
       app.pg.query(
-        `SELECT * FROM huddle_topics WHERE huddle_id = $1 ORDER BY sort_order ASC, created_at ASC`,
+        `SELECT t.*, uo.name AS owner_name
+           FROM huddle_topics t
+           LEFT JOIN users uo ON uo.id = t.owner_user_id
+          WHERE t.huddle_id = $1
+          ORDER BY t.sort_order ASC, t.created_at ASC`,
         [id],
       ),
       app.pg.query(
@@ -907,7 +972,7 @@ export default async function huddleRoutes(app: FastifyInstance) {
          FROM huddle_intentions i
          LEFT JOIN users u ON u.id = i.owner_user_id
          WHERE i.huddle_id = $1
-         ORDER BY i.created_at ASC`,
+         ORDER BY i.sort_order ASC, i.created_at ASC`,
         [id],
       ),
       app.pg.query(
@@ -1070,12 +1135,39 @@ export default async function huddleRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
     const body = createSignalSchema.parse(request.body);
     await loadHuddleOrThrow(app, id, userId);
+    const orderRes = await app.pg.query(
+      `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM huddle_signals WHERE huddle_id = $1`, [id],
+    );
     const r = await app.pg.query(
-      `INSERT INTO huddle_signals (huddle_id, author_user_id, text, why_it_matters, details)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [id, userId, body.text, body.whyItMatters ?? null, body.details ?? null],
+      `INSERT INTO huddle_signals (huddle_id, author_user_id, text, why_it_matters, details, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [id, userId, body.text, body.whyItMatters ?? null, body.details ?? null, orderRes.rows[0].next],
     );
     return reply.status(201).send({ signal: formatSignal(r.rows[0]) });
+  });
+
+  app.put('/huddles/:id/signals/reorder', { preHandler: [app.authenticate] }, async (request) => {
+    const userId = request.user.sub;
+    const { id } = request.params as { id: string };
+    const body = reorderSchema.parse(request.body);
+    await loadHuddleOrThrow(app, id, userId);
+    const client = await app.pg.connect();
+    try {
+      await client.query('BEGIN');
+      for (let idx = 0; idx < body.orderedIds.length; idx++) {
+        await client.query(
+          `UPDATE huddle_signals SET sort_order = $1 WHERE id = $2 AND huddle_id = $3`,
+          [idx, body.orderedIds[idx], id],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+    return { ok: true };
   });
 
   app.put('/huddles/:id/signals/:sid/promote', { preHandler: [app.authenticate] }, async (request) => {
@@ -1153,11 +1245,40 @@ export default async function huddleRoutes(app: FastifyInstance) {
       `SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM huddle_topics WHERE huddle_id = $1`, [id],
     );
     const r = await app.pg.query(
-      `INSERT INTO huddle_topics (huddle_id, title, context, details, sort_order, source_signal_id)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [id, body.title, body.context ?? null, body.details ?? null, orderRes.rows[0].next, body.sourceSignalId ?? null],
+      `INSERT INTO huddle_topics
+         (huddle_id, title, context, details, sort_order, source_signal_id, parent_topic_id, owner_user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [
+        id, body.title, body.context ?? null, body.details ?? null,
+        orderRes.rows[0].next, body.sourceSignalId ?? null,
+        body.parentTopicId ?? null, body.ownerUserId ?? null,
+      ],
     );
     return reply.status(201).send({ topic: formatTopic(r.rows[0]) });
+  });
+
+  app.put('/huddles/:id/topics/reorder', { preHandler: [app.authenticate] }, async (request) => {
+    const userId = request.user.sub;
+    const { id } = request.params as { id: string };
+    const body = reorderSchema.parse(request.body);
+    await loadHuddleOrThrow(app, id, userId);
+    const client = await app.pg.connect();
+    try {
+      await client.query('BEGIN');
+      for (let idx = 0; idx < body.orderedIds.length; idx++) {
+        await client.query(
+          `UPDATE huddle_topics SET sort_order = $1, updated_at = now() WHERE id = $2 AND huddle_id = $3`,
+          [idx, body.orderedIds[idx], id],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+    return { ok: true };
   });
 
   app.put('/huddles/:id/topics/:tid', { preHandler: [app.authenticate] }, async (request) => {
@@ -1172,19 +1293,33 @@ export default async function huddleRoutes(app: FastifyInstance) {
     if (body.context !== undefined) { sets.push(`context = $${i++}`); params.push(body.context); }
     if (body.details !== undefined) { sets.push(`details = $${i++}`); params.push(body.details); }
     if (body.sortOrder !== undefined) { sets.push(`sort_order = $${i++}`); params.push(body.sortOrder); }
-    if (body.status !== undefined) { sets.push(`status = $${i++}`); params.push(body.status); }
-    if (sets.length === 0) {
-      const cur = await app.pg.query('SELECT * FROM huddle_topics WHERE id = $1 AND huddle_id = $2', [tid, id]);
-      if (cur.rows.length === 0) throw new NotFoundError('Topic not found');
-      return { topic: formatTopic(cur.rows[0]) };
+    if (body.openReason !== undefined) { sets.push(`open_reason = $${i++}`); params.push(body.openReason); }
+    if (body.horizon !== undefined) { sets.push(`horizon = $${i++}`); params.push(body.horizon); }
+    if (body.ownerUserId !== undefined) { sets.push(`owner_user_id = $${i++}`); params.push(body.ownerUserId); }
+    if (body.approverUserId !== undefined) { sets.push(`approver_user_id = $${i++}`); params.push(body.approverUserId); }
+    if (body.parentTopicId !== undefined) {
+      if (body.parentTopicId === tid) throw new BadRequestError('A topic cannot be its own parent');
+      sets.push(`parent_topic_id = $${i++}`); params.push(body.parentTopicId);
     }
+    if (body.status !== undefined) {
+      sets.push(`status = $${i++}`); params.push(body.status);
+      // Keep the terminal-state bookkeeping consistent however the status is
+      // set, so a plain PUT can't leave a closed topic without a closed_at.
+      if (body.status === 'open') {
+        sets.push(`closed_at = NULL`, `closed_by_user_id = NULL`);
+      } else {
+        sets.push(`open_reason = NULL`, `closed_at = COALESCE(closed_at, now())`);
+        sets.push(`closed_by_user_id = $${i++}`); params.push(userId);
+      }
+    }
+    if (sets.length === 0) return { topic: await topicWithNames(tid, id) };
     sets.push(`updated_at = now()`);
     params.push(tid, id);
     const r = await app.pg.query(
-      `UPDATE huddle_topics SET ${sets.join(', ')} WHERE id = $${i++} AND huddle_id = $${i} RETURNING *`, params,
+      `UPDATE huddle_topics SET ${sets.join(', ')} WHERE id = $${i++} AND huddle_id = $${i} RETURNING id`, params,
     );
     if (r.rows.length === 0) throw new NotFoundError('Topic not found');
-    return { topic: formatTopic(r.rows[0]) };
+    return { topic: await topicWithNames(tid, id) };
   });
 
   app.delete('/huddles/:id/topics/:tid', { preHandler: [app.authenticate] }, async (request, reply) => {
@@ -1261,9 +1396,15 @@ export default async function huddleRoutes(app: FastifyInstance) {
          VALUES ($1, $2, $3, $4) RETURNING *`,
         [tid, body.ownerUserId ?? null, body.decisionText, body.details ?? null],
       );
+      // Recording a decision closes the topic. The non-empty decision log is
+      // what makes it render as "Decided" rather than plain "Closed".
       await client.query(
-        `UPDATE huddle_topics SET status = 'decided', updated_at = now() WHERE id = $1`,
-        [tid],
+        `UPDATE huddle_topics
+            SET status = 'closed', open_reason = NULL,
+                closed_at = COALESCE(closed_at, now()), closed_by_user_id = $2,
+                updated_at = now()
+          WHERE id = $1`,
+        [tid, userId],
       );
       await client.query('COMMIT');
       return reply.status(201).send({ decision: formatDecision(dec.rows[0]) });
@@ -1275,17 +1416,97 @@ export default async function huddleRoutes(app: FastifyInstance) {
     }
   });
 
+  // ── Topic lifecycle transitions ────────────────────────────────────────
+  // Re-reads the row with owner/approver names joined so the response matches
+  // the shape the detail endpoint returns.
+  async function topicWithNames(topicId: string, huddleId: string) {
+    const r = await app.pg.query(
+      `SELECT t.*, uo.name AS owner_name, ua.name AS approver_name
+         FROM huddle_topics t
+         LEFT JOIN users uo ON uo.id = t.owner_user_id
+         LEFT JOIN users ua ON ua.id = t.approver_user_id
+        WHERE t.id = $1 AND t.huddle_id = $2`,
+      [topicId, huddleId],
+    );
+    if (r.rows.length === 0) throw new NotFoundError('Topic not found');
+    return formatTopic(r.rows[0]);
+  }
+
+  // Deferred: needs more time or info, comes back next huddle as-is.
+  // Passing horizon='long_term' moves it out of the weekly rotation entirely —
+  // the escalation exit for topics that matter but aren't this week's problem.
+  app.post('/huddles/:id/topics/:tid/defer', { preHandler: [app.authenticate] }, async (request) => {
+    const userId = request.user.sub;
+    const { id, tid } = request.params as { id: string; tid: string };
+    const body = deferTopicSchema.parse(request.body ?? {});
+    await loadHuddleOrThrow(app, id, userId);
+    const r = await app.pg.query(
+      `UPDATE huddle_topics
+          SET status = 'open', open_reason = 'deferred',
+              horizon = COALESCE($3, horizon),
+              closed_at = NULL, closed_by_user_id = NULL,
+              updated_at = now()
+        WHERE id = $1 AND huddle_id = $2 RETURNING id`,
+      [tid, id, body?.horizon ?? null],
+    );
+    if (r.rows.length === 0) throw new NotFoundError('Topic not found');
+    return { topic: await topicWithNames(tid, id) };
+  });
+
+  // Needs a decision: pending on a named decision-maker. The approver is the
+  // DACI-style "who can actually call this" — a topic stuck here usually has
+  // an owner and no approver, which is precisely why it keeps deferring.
+  app.post('/huddles/:id/topics/:tid/needs-decision', { preHandler: [app.authenticate] }, async (request) => {
+    const userId = request.user.sub;
+    const { id, tid } = request.params as { id: string; tid: string };
+    const body = needsDecisionSchema.parse(request.body ?? {});
+    await loadHuddleOrThrow(app, id, userId);
+    const r = await app.pg.query(
+      `UPDATE huddle_topics
+          SET status = 'open', open_reason = 'needs_decision',
+              approver_user_id = COALESCE($3, approver_user_id),
+              owner_user_id    = COALESCE($4, owner_user_id),
+              closed_at = NULL, closed_by_user_id = NULL,
+              updated_at = now()
+        WHERE id = $1 AND huddle_id = $2 RETURNING id`,
+      [tid, id, body?.approverUserId ?? null, body?.ownerUserId ?? null],
+    );
+    if (r.rows.length === 0) throw new NotFoundError('Topic not found');
+    return { topic: await topicWithNames(tid, id) };
+  });
+
+  // Leaves the loop. outcome='closed' means resolved (renders as "Decided"
+  // when the decision log is non-empty); 'cancelled' means no longer relevant.
+  app.post('/huddles/:id/topics/:tid/close', { preHandler: [app.authenticate] }, async (request) => {
+    const userId = request.user.sub;
+    const { id, tid } = request.params as { id: string; tid: string };
+    const body = closeTopicSchema.parse(request.body ?? {});
+    await loadHuddleOrThrow(app, id, userId);
+    const r = await app.pg.query(
+      `UPDATE huddle_topics
+          SET status = $3, open_reason = NULL,
+              closed_at = COALESCE(closed_at, now()), closed_by_user_id = $4,
+              updated_at = now()
+        WHERE id = $1 AND huddle_id = $2 RETURNING id`,
+      [tid, id, body?.outcome ?? 'closed', userId],
+    );
+    if (r.rows.length === 0) throw new NotFoundError('Topic not found');
+    return { topic: await topicWithNames(tid, id) };
+  });
+
+  // Deprecated alias kept so an older cached web bundle doesn't 404 mid-deploy.
   app.post('/huddles/:id/topics/:tid/park', { preHandler: [app.authenticate] }, async (request) => {
     const userId = request.user.sub;
     const { id, tid } = request.params as { id: string; tid: string };
     await loadHuddleOrThrow(app, id, userId);
     const r = await app.pg.query(
-      `UPDATE huddle_topics SET status = 'parked', updated_at = now()
-       WHERE id = $1 AND huddle_id = $2 RETURNING *`,
+      `UPDATE huddle_topics
+          SET status = 'open', open_reason = 'deferred', updated_at = now()
+        WHERE id = $1 AND huddle_id = $2 RETURNING id`,
       [tid, id],
     );
     if (r.rows.length === 0) throw new NotFoundError('Topic not found');
-    return { topic: formatTopic(r.rows[0]) };
+    return { topic: await topicWithNames(tid, id) };
   });
 
   app.put('/huddles/:id/decisions/:did', { preHandler: [app.authenticate] }, async (request) => {
@@ -1320,12 +1541,39 @@ export default async function huddleRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
     const body = createIntentionSchema.parse(request.body);
     await loadHuddleOrThrow(app, id, userId);
+    const orderRes = await app.pg.query(
+      `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM huddle_intentions WHERE huddle_id = $1`, [id],
+    );
     const r = await app.pg.query(
-      `INSERT INTO huddle_intentions (huddle_id, text, owner_user_id, soft_due_text, details)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [id, body.text, body.ownerUserId ?? userId, body.softDueText ?? null, body.details ?? null],
+      `INSERT INTO huddle_intentions (huddle_id, text, owner_user_id, soft_due_text, details, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [id, body.text, body.ownerUserId ?? userId, body.softDueText ?? null, body.details ?? null, orderRes.rows[0].next],
     );
     return reply.status(201).send({ intention: formatIntention(r.rows[0]) });
+  });
+
+  app.put('/huddles/:id/intentions/reorder', { preHandler: [app.authenticate] }, async (request) => {
+    const userId = request.user.sub;
+    const { id } = request.params as { id: string };
+    const body = reorderSchema.parse(request.body);
+    await loadHuddleOrThrow(app, id, userId);
+    const client = await app.pg.connect();
+    try {
+      await client.query('BEGIN');
+      for (let idx = 0; idx < body.orderedIds.length; idx++) {
+        await client.query(
+          `UPDATE huddle_intentions SET sort_order = $1, updated_at = now() WHERE id = $2 AND huddle_id = $3`,
+          [idx, body.orderedIds[idx], id],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+    return { ok: true };
   });
 
   app.put('/huddles/:id/intentions/:iid', { preHandler: [app.authenticate] }, async (request) => {
@@ -1712,8 +1960,8 @@ export default async function huddleRoutes(app: FastifyInstance) {
     if (workspaceId) await checkWorkspaceMember(app, workspaceId, userId);
 
     const huddleRes = await app.pg.query(
-      `INSERT INTO huddles (workspace_id, type, title, intention, host_user_id, scheduled_at, status, email_summary_on_close)
-       VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7) RETURNING *`,
+      `INSERT INTO huddles (workspace_id, type, title, intention, host_user_id, scheduled_at, status, email_summary_on_close, template_id)
+       VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8) RETURNING *`,
       [
         workspaceId,
         tpl.type,
@@ -1722,6 +1970,8 @@ export default async function huddleRoutes(app: FastifyInstance) {
         userId,
         overrides.scheduledAt ?? null,
         !!tpl.email_summary_to_participants,
+        // Ties this huddle to its series, so the template can be reported on.
+        tid,
       ],
     );
     const huddle = huddleRes.rows[0];
@@ -1892,7 +2142,7 @@ export default async function huddleRoutes(app: FastifyInstance) {
         [huddleId],
       ),
       app.pg.query(
-        `SELECT id, title, context, status, sort_order
+        `SELECT id, title, context, status, open_reason, sort_order
          FROM huddle_topics WHERE huddle_id = $1
          ORDER BY sort_order ASC, created_at ASC`,
         [huddleId],
@@ -1911,7 +2161,7 @@ export default async function huddleRoutes(app: FastifyInstance) {
          FROM huddle_intentions i
          LEFT JOIN users u ON u.id = i.owner_user_id
          WHERE i.huddle_id = $1
-         ORDER BY i.created_at ASC`,
+         ORDER BY i.sort_order ASC, i.created_at ASC`,
         [huddleId],
       ),
       app.pg.query(
@@ -1972,6 +2222,7 @@ export default async function huddleRoutes(app: FastifyInstance) {
           title: t.title,
           context: t.context,
           status: t.status,
+          openReason: t.open_reason ?? null,
           decisions: decByTopic.get(t.id) ?? [],
         })),
         intentions: intentions.rows.map((i) => ({

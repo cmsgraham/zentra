@@ -16,6 +16,72 @@ const POLL_MS = 6000; // near-realtime via polling
 
 interface Workspace { id: string; name: string }
 
+// ── Drag-to-reorder helpers ────────────────────────────────────────────────
+
+function reorderIds<T extends string>(ids: T[], draggedId: T, targetId: T): T[] {
+  const from = ids.indexOf(draggedId);
+  const to = ids.indexOf(targetId);
+  if (from === -1 || to === -1 || from === to) return ids;
+  const next = ids.slice();
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+}
+
+// Re-orders only the items present in `subsetIdsInNewOrder`, keeping every
+// other id's position untouched — used when dragging within a filtered view
+// (e.g. one tab of the personal board) that's backed by one shared list.
+function reorderWithinSubset<T extends string>(fullIds: T[], subsetIdsInNewOrder: T[]): T[] {
+  const subsetSet = new Set(subsetIdsInNewOrder);
+  let i = 0;
+  return fullIds.map((id) => (subsetSet.has(id) ? subsetIdsInNewOrder[i++] : id));
+}
+
+function Reorderable({
+  id, onDropReorder, children,
+}: { id: string; onDropReorder: (draggedId: string, targetId: string) => void; children: React.ReactNode }) {
+  const [over, setOver] = useState(false);
+  return (
+    <div
+      draggable
+      onDragStart={(e) => {
+        // Let clicks/selection inside buttons, links, and form fields (Edit,
+        // Delete, Promote, the inline edit inputs, etc.) behave normally
+        // instead of being hijacked into a card drag.
+        const target = e.target as HTMLElement;
+        if (target.closest('input, textarea, select, button, a')) {
+          e.preventDefault();
+          return;
+        }
+        e.dataTransfer.setData('text/plain', id);
+        e.dataTransfer.effectAllowed = 'move';
+      }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (!over) setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setOver(false);
+        const draggedId = e.dataTransfer.getData('text/plain');
+        if (draggedId && draggedId !== id) onDropReorder(draggedId, id);
+      }}
+      onDragEnd={() => setOver(false)}
+      style={{
+        cursor: 'grab',
+        borderRadius: 8,
+        outline: over ? '2px dashed var(--ink-accent)' : '2px dashed transparent',
+        outlineOffset: 2,
+        transition: 'outline-color 0.1s',
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
 export function HuddleDetailView({ huddleId }: { huddleId: string }) {
   const router = useRouter();
   const { user } = useAuth();
@@ -62,6 +128,66 @@ export function HuddleDetailView({ huddleId }: { huddleId: string }) {
 
   const refresh = () => fetchHuddle(true);
 
+  async function reorderSignals(draggedId: string, targetId: string) {
+    if (!huddle) return;
+    const ids = huddle.signals.map((s) => s.id);
+    const nextIds = reorderIds(ids, draggedId, targetId);
+    if (nextIds === ids) return;
+    const byId = new Map(huddle.signals.map((s) => [s.id, s]));
+    setHuddle({ ...huddle, signals: nextIds.map((sid) => byId.get(sid)!) });
+    try {
+      await api(`/huddles/${huddle.id}/signals/reorder`, { method: 'PUT', body: { orderedIds: nextIds } });
+    } catch {
+      fetchHuddle(true);
+    }
+  }
+
+  async function reorderPersonalSignals(tag: string, draggedId: string, targetId: string) {
+    if (!huddle) return;
+    const subsetIds = huddle.signals
+      .filter((s) => (s.whyItMatters ?? '').startsWith(`@${tag}`))
+      .map((s) => s.id);
+    const nextSubset = reorderIds(subsetIds, draggedId, targetId);
+    if (nextSubset === subsetIds) return;
+    const fullIds = huddle.signals.map((s) => s.id);
+    const nextFullIds = reorderWithinSubset(fullIds, nextSubset);
+    const byId = new Map(huddle.signals.map((s) => [s.id, s]));
+    setHuddle({ ...huddle, signals: nextFullIds.map((sid) => byId.get(sid)!) });
+    try {
+      await api(`/huddles/${huddle.id}/signals/reorder`, { method: 'PUT', body: { orderedIds: nextFullIds } });
+    } catch {
+      fetchHuddle(true);
+    }
+  }
+
+  async function reorderTopics(draggedId: string, targetId: string) {
+    if (!huddle) return;
+    const ids = huddle.topics.map((t) => t.id);
+    const nextIds = reorderIds(ids, draggedId, targetId);
+    if (nextIds === ids) return;
+    const byId = new Map(huddle.topics.map((t) => [t.id, t]));
+    setHuddle({ ...huddle, topics: nextIds.map((tid) => byId.get(tid)!) });
+    try {
+      await api(`/huddles/${huddle.id}/topics/reorder`, { method: 'PUT', body: { orderedIds: nextIds } });
+    } catch {
+      fetchHuddle(true);
+    }
+  }
+
+  async function reorderIntentions(draggedId: string, targetId: string) {
+    if (!huddle) return;
+    const ids = huddle.intentions.map((i) => i.id);
+    const nextIds = reorderIds(ids, draggedId, targetId);
+    if (nextIds === ids) return;
+    const byId = new Map(huddle.intentions.map((i) => [i.id, i]));
+    setHuddle({ ...huddle, intentions: nextIds.map((iid) => byId.get(iid)!) });
+    try {
+      await api(`/huddles/${huddle.id}/intentions/reorder`, { method: 'PUT', body: { orderedIds: nextIds } });
+    } catch {
+      fetchHuddle(true);
+    }
+  }
+
   if (loading) {
     return <div className="p-8 text-[13px]" style={{ color: 'var(--ink-text-muted)' }}>Loading huddle…</div>;
   }
@@ -85,9 +211,22 @@ export function HuddleDetailView({ huddleId }: { huddleId: string }) {
       <IntentionBar huddle={huddle} isHost={isHost} onChange={refresh} />
       <div className="px-4 sm:px-6 lg:px-8 pb-24">
         {huddle.type === 'team' ? (
-          <TeamBoard huddle={huddle} workspaces={workspaces} onChange={refresh} />
+          <TeamBoard
+            huddle={huddle}
+            workspaces={workspaces}
+            onChange={refresh}
+            onReorderSignals={reorderSignals}
+            onReorderTopics={reorderTopics}
+            onReorderIntentions={reorderIntentions}
+          />
         ) : (
-          <PersonalBoard huddle={huddle} workspaces={workspaces} onChange={refresh} />
+          <PersonalBoard
+            huddle={huddle}
+            workspaces={workspaces}
+            onChange={refresh}
+            onReorderPersonalSignals={reorderPersonalSignals}
+            onReorderIntentions={reorderIntentions}
+          />
         )}
       </div>
     </div>
@@ -312,7 +451,14 @@ function IntentionBar({ huddle, isHost, onChange }: { huddle: HuddleDetail; isHo
 
 // ── Team Board (4 columns) ────────────────────────────────────────────────
 
-function TeamBoard({ huddle, workspaces, onChange }: { huddle: HuddleDetail; workspaces: Workspace[]; onChange: () => void }) {
+function TeamBoard({
+  huddle, workspaces, onChange, onReorderSignals, onReorderTopics, onReorderIntentions,
+}: {
+  huddle: HuddleDetail; workspaces: Workspace[]; onChange: () => void;
+  onReorderSignals: (draggedId: string, targetId: string) => void;
+  onReorderTopics: (draggedId: string, targetId: string) => void;
+  onReorderIntentions: (draggedId: string, targetId: string) => void;
+}) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mt-5">
       <Column
@@ -327,7 +473,11 @@ function TeamBoard({ huddle, workspaces, onChange }: { huddle: HuddleDetail; wor
         secondaryPlaceholder="Why it matters (optional)"
       >
         {huddle.signals.length === 0 ? <Empty text="No signals yet" /> :
-          huddle.signals.map((s) => <SignalCard key={s.id} signal={s} huddleId={huddle.id} onChange={onChange} />)}
+          huddle.signals.map((s) => (
+            <Reorderable key={s.id} id={s.id} onDropReorder={onReorderSignals}>
+              <SignalCard signal={s} huddleId={huddle.id} onChange={onChange} />
+            </Reorderable>
+          ))}
       </Column>
 
       <Column
@@ -342,7 +492,7 @@ function TeamBoard({ huddle, workspaces, onChange }: { huddle: HuddleDetail; wor
         secondaryPlaceholder="Context (optional)"
       >
         {huddle.topics.length === 0 ? <Empty text="No topics yet" /> :
-          huddle.topics.map((t) => <TopicCard key={t.id} topic={t} participants={huddle.participants} huddleId={huddle.id} onChange={onChange} />)}
+          renderTopicTree(huddle, onChange, onReorderTopics)}
       </Column>
 
       <Column
@@ -375,7 +525,9 @@ function TeamBoard({ huddle, workspaces, onChange }: { huddle: HuddleDetail; wor
       >
         {huddle.intentions.length === 0 ? <Empty text="No intentions yet" /> :
           huddle.intentions.map((i) => (
-            <IntentionCard key={i.id} intention={i} huddleId={huddle.id} workspaces={workspaces} huddleWorkspaceId={huddle.workspaceId} onChange={onChange} />
+            <Reorderable key={i.id} id={i.id} onDropReorder={onReorderIntentions}>
+              <IntentionCard intention={i} huddleId={huddle.id} workspaces={workspaces} huddleWorkspaceId={huddle.workspaceId} onChange={onChange} />
+            </Reorderable>
           ))}
 
         {huddle.followups.length > 0 && (
@@ -391,9 +543,63 @@ function TeamBoard({ huddle, workspaces, onChange }: { huddle: HuddleDetail; wor
   );
 }
 
+// Renders topics with subtopics nested one level under their parent, so a
+// parent can close on its own terms while its children stay in the loop.
+// Only root topics take part in drag-reorder; children follow their parent.
+function renderTopicTree(
+  huddle: HuddleDetail,
+  onChange: () => void,
+  onReorderTopics: (draggedId: string, targetId: string) => void,
+) {
+  const byId = new Set(huddle.topics.map((t) => t.id));
+  const childrenOf = new Map<string, HuddleTopic[]>();
+  for (const t of huddle.topics) {
+    // Treat a topic whose parent isn't in this huddle as a root, so a stale
+    // parent pointer can never hide it from the board entirely.
+    if (t.parentTopicId && byId.has(t.parentTopicId)) {
+      const arr = childrenOf.get(t.parentTopicId) ?? [];
+      arr.push(t);
+      childrenOf.set(t.parentTopicId, arr);
+    }
+  }
+  const roots = huddle.topics.filter((t) => !t.parentTopicId || !byId.has(t.parentTopicId));
+  const hasOpenChild = (id: string) => (childrenOf.get(id) ?? []).some((c) => c.status === 'open');
+
+  return roots.map((t) => {
+    const kids = childrenOf.get(t.id) ?? [];
+    return (
+      <Reorderable key={t.id} id={t.id} onDropReorder={onReorderTopics}>
+        <TopicCard
+          topic={t} participants={huddle.participants} huddleId={huddle.id}
+          onChange={onChange} hasOpenChild={hasOpenChild(t.id)}
+        />
+        {kids.length > 0 && (
+          <div
+            className="mt-1.5 space-y-1.5"
+            style={{ marginLeft: 10, paddingLeft: 8, borderLeft: '1px dashed var(--ink-border)' }}
+          >
+            {kids.map((c) => (
+              <TopicCard
+                key={c.id} topic={c} participants={huddle.participants} huddleId={huddle.id}
+                onChange={onChange} hasOpenChild={hasOpenChild(c.id)}
+              />
+            ))}
+          </div>
+        )}
+      </Reorderable>
+    );
+  });
+}
+
 // ── Personal Board (warmer, single-column-ish, sections) ──────────────────
 
-function PersonalBoard({ huddle, workspaces, onChange }: { huddle: HuddleDetail; workspaces: Workspace[]; onChange: () => void }) {
+function PersonalBoard({
+  huddle, workspaces, onChange, onReorderPersonalSignals, onReorderIntentions,
+}: {
+  huddle: HuddleDetail; workspaces: Workspace[]; onChange: () => void;
+  onReorderPersonalSignals: (tag: string, draggedId: string, targetId: string) => void;
+  onReorderIntentions: (draggedId: string, targetId: string) => void;
+}) {
   // For personal huddles we use signals to capture wins/friction/growth/support,
   // tagged via the "whyItMatters" prefix. Simpler than separate tables and
   // keeps the schema unified. We render them grouped by tag.
@@ -448,6 +654,7 @@ function PersonalBoard({ huddle, workspaces, onChange }: { huddle: HuddleDetail;
         rawItems={tagged(tab)}
         onAdd={add}
         onDelete={async (id) => { await api(`/huddles/${huddle.id}/signals/${id}`, { method: 'DELETE' }); onChange(); }}
+        onReorder={(draggedId, targetId) => onReorderPersonalSignals(tab, draggedId, targetId)}
       />
 
       <div className="rounded-2xl p-5" style={{ background: 'var(--ink-surface)', border: '1px solid var(--ink-border-subtle)' }}>
@@ -466,7 +673,9 @@ function PersonalBoard({ huddle, workspaces, onChange }: { huddle: HuddleDetail;
         <div className="mt-3 space-y-2">
           {huddle.intentions.length === 0 ? <Empty text="None yet" /> :
             huddle.intentions.map((i) => (
-              <IntentionCard key={i.id} intention={i} huddleId={huddle.id} workspaces={workspaces} huddleWorkspaceId={huddle.workspaceId} onChange={onChange} />
+              <Reorderable key={i.id} id={i.id} onDropReorder={onReorderIntentions}>
+                <IntentionCard intention={i} huddleId={huddle.id} workspaces={workspaces} huddleWorkspaceId={huddle.workspaceId} onChange={onChange} />
+              </Reorderable>
             ))}
         </div>
 
@@ -484,12 +693,13 @@ function PersonalBoard({ huddle, workspaces, onChange }: { huddle: HuddleDetail;
 }
 
 function PersonalSection({
-  title, prompt, placeholder, items, rawItems, onAdd, onDelete,
+  title, prompt, placeholder, items, rawItems, onAdd, onDelete, onReorder,
 }: {
   title: string; prompt: string; placeholder: string; items: string[];
   rawItems: HuddleSignal[];
   onAdd: (text: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  onReorder: (draggedId: string, targetId: string) => void;
 }) {
   return (
     <div className="rounded-2xl p-5" style={{ background: 'var(--ink-surface)', border: '1px solid var(--ink-border-subtle)' }}>
@@ -503,24 +713,25 @@ function PersonalSection({
           <Empty text="Nothing here yet" />
         ) : (
           rawItems.map((s, i) => (
-            <div
-              key={s.id}
-              className="group flex items-start gap-2.5 px-3 py-2 rounded-lg"
-              style={{ background: 'var(--ink-bg)', border: '1px solid var(--ink-border-subtle)' }}
-            >
-              <span style={{
-                width: 6, height: 6, borderRadius: '50%', marginTop: 8,
-                background: 'var(--ink-accent)', flexShrink: 0,
-              }} />
-              <p className="flex-1 text-[14px]" style={{ color: 'var(--ink-text)', lineHeight: 1.5 }}>{items[i]}</p>
-              <button
-                onClick={() => onDelete(s.id)}
-                className="opacity-0 group-hover:opacity-100 transition-opacity text-[11.5px]"
-                style={{ color: 'var(--ink-text-muted)' }}
+            <Reorderable key={s.id} id={s.id} onDropReorder={onReorder}>
+              <div
+                className="group flex items-start gap-2.5 px-3 py-2 rounded-lg"
+                style={{ background: 'var(--ink-bg)', border: '1px solid var(--ink-border-subtle)' }}
               >
-                Remove
-              </button>
-            </div>
+                <span style={{
+                  width: 6, height: 6, borderRadius: '50%', marginTop: 8,
+                  background: 'var(--ink-accent)', flexShrink: 0,
+                }} />
+                <p className="flex-1 text-[14px]" style={{ color: 'var(--ink-text)', lineHeight: 1.5 }}>{items[i]}</p>
+                <button
+                  onClick={() => onDelete(s.id)}
+                  className="opacity-0 group-hover:opacity-100 transition-opacity text-[11.5px]"
+                  style={{ color: 'var(--ink-text-muted)' }}
+                >
+                  Remove
+                </button>
+              </div>
+            </Reorderable>
           ))
         )}
       </div>
@@ -770,12 +981,17 @@ function SignalCard({ signal, huddleId, onChange }: { signal: HuddleSignal; hudd
 }
 
 function TopicCard({
-  topic, participants, huddleId, onChange,
-}: { topic: HuddleTopic; participants: HuddleDetail['participants']; huddleId: string; onChange: () => void }) {
+  topic, participants, huddleId, onChange, hasOpenChild = false,
+}: {
+  topic: HuddleTopic; participants: HuddleDetail['participants']; huddleId: string;
+  onChange: () => void; hasOpenChild?: boolean;
+}) {
   const [decideOpen, setDecideOpen] = useState(false);
   const [decision, setDecision] = useState('');
   const [owner, setOwner] = useState<string>('');
   const [busy, setBusy] = useState(false);
+  const [subOpen, setSubOpen] = useState(false);
+  const [subTitle, setSubTitle] = useState('');
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(topic.title);
   const [context, setContext] = useState(topic.context ?? '');
@@ -792,11 +1008,6 @@ function TopicCard({
       setDecideOpen(false); setDecision(''); setOwner('');
       onChange();
     } finally { setBusy(false); }
-  }
-  async function park() {
-    setBusy(true);
-    try { await api(`/huddles/${huddleId}/topics/${topic.id}/park`, { method: 'POST', body: {} }); onChange(); }
-    finally { setBusy(false); }
   }
   async function del() {
     if (!confirm('Delete this focus topic? Any decisions on it will be removed too.')) return;
@@ -827,7 +1038,51 @@ function TopicCard({
     setEditing(false);
   }
 
-  const stateColor = topic.status === 'decided' ? 'var(--ink-done)' : topic.status === 'parked' ? 'var(--ink-text-faint)' : 'var(--ink-accent)';
+  const hasDecisions = (topic.decisions?.length ?? 0) > 0;
+  const isOpen = topic.status === 'open';
+  const stateColor =
+    topic.status === 'closed' ? 'var(--ink-done)'
+    : topic.status === 'cancelled' ? 'var(--ink-text-faint)'
+    : topic.openReason === 'needs_decision' ? 'var(--ink-blocked)'
+    : 'var(--ink-accent)';
+
+  // A topic that keeps re-entering the loop without progress needs an exit,
+  // not another deferral. Suppressed while something is legitimately in
+  // flight — an open subtopic means the work is actually moving.
+  const showEscalation =
+    isOpen && topic.deferCount >= 3 && topic.horizon === 'short_term' && !hasOpenChild;
+
+  async function setNeedsDecision() {
+    setBusy(true);
+    try {
+      await api(`/huddles/${huddleId}/topics/${topic.id}/needs-decision`, { method: 'POST', body: {} });
+      onChange();
+    } finally { setBusy(false); }
+  }
+  async function toLongTerm() {
+    setBusy(true);
+    try {
+      await api(`/huddles/${huddleId}/topics/${topic.id}/defer`, {
+        method: 'POST', body: { horizon: 'long_term' },
+      });
+      onChange();
+    } finally { setBusy(false); }
+  }
+  async function closeTopic(outcome: 'closed' | 'cancelled') {
+    if (outcome === 'cancelled' && !confirm('Mark this topic no longer relevant? It stops coming back.')) return;
+    setBusy(true);
+    try {
+      await api(`/huddles/${huddleId}/topics/${topic.id}/close`, { method: 'POST', body: { outcome } });
+      onChange();
+    } finally { setBusy(false); }
+  }
+  async function reopen() {
+    setBusy(true);
+    try {
+      await api(`/huddles/${huddleId}/topics/${topic.id}/defer`, { method: 'POST', body: {} });
+      onChange();
+    } finally { setBusy(false); }
+  }
 
   return (
     <div className="group rounded-lg p-2.5"
@@ -835,7 +1090,7 @@ function TopicCard({
         background: 'var(--ink-bg)',
         border: `1px solid var(--ink-border-subtle)`,
         borderLeft: `2px solid ${stateColor}`,
-        opacity: topic.status === 'parked' ? 0.7 : 1,
+        opacity: topic.status === 'cancelled' ? 0.6 : 1,
       }}>
       {editing ? (
         <div className="space-y-1.5">
@@ -896,6 +1151,7 @@ function TopicCard({
           </div>
           {topic.context && <p className="text-[12px] mt-1" style={{ color: 'var(--ink-text-muted)' }}>{topic.context}</p>}
           {topic.details && <DetailsBlock text={topic.details} />}
+          <TopicStateRow topic={topic} hasDecisions={hasDecisions} />
         </>
       )}
 
@@ -907,17 +1163,123 @@ function TopicCard({
         </ul>
       )}
 
-      {topic.status === 'open' && !decideOpen && !editing && (
-        <div className="flex items-center gap-1.5 mt-2">
+      {showEscalation && !decideOpen && !editing && (
+        <div
+          className="mt-2 px-2 py-1.5 rounded-md text-[11.5px]"
+          style={{ background: 'var(--ink-accent-subtle)', border: '1px dashed var(--ink-blocked)' }}
+        >
+          <div style={{ color: 'var(--ink-text)', fontWeight: 600, marginBottom: 4 }}>
+            Deferred {topic.deferCount}× without progress
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button onClick={setNeedsDecision} disabled={busy}
+              className="px-2 py-0.5 rounded-md"
+              style={{ background: 'var(--ink-blocked)', color: 'var(--ink-on-accent)', fontWeight: 600 }}>
+              Needs a decision-maker
+            </button>
+            <button onClick={toLongTerm} disabled={busy}
+              className="px-2 py-0.5 rounded-md"
+              style={{ background: 'var(--ink-surface-raised)', color: 'var(--ink-text)', border: '1px solid var(--ink-border)' }}>
+              Move to long-term
+            </button>
+            <button onClick={() => closeTopic('cancelled')} disabled={busy}
+              style={{ color: 'var(--ink-text-muted)' }}>
+              Cancel it
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isOpen && !decideOpen && !editing && (
+        <div className="flex items-center gap-1.5 mt-2 flex-wrap">
           <button onClick={() => setDecideOpen(true)}
             className="text-[11.5px] px-2 py-0.5 rounded-md"
             style={{ background: 'var(--ink-accent-light)', color: 'var(--ink-accent)', fontWeight: 600 }}>
             Decide
           </button>
-          <button onClick={park} disabled={busy}
+          <button onClick={() => closeTopic('closed')} disabled={busy}
+            title="Discussed and resolved — no decision to record"
+            className="text-[11.5px] px-2 py-0.5 rounded-md"
+            style={{ color: 'var(--ink-text-secondary)' }}>
+            Close
+          </button>
+          {topic.openReason !== 'deferred' && (
+            <button onClick={reopen} disabled={busy}
+              title="Needs more time or info — comes back next huddle"
+              className="text-[11.5px] px-2 py-0.5 rounded-md"
+              style={{ color: 'var(--ink-text-muted)' }}>
+              Defer
+            </button>
+          )}
+          {topic.openReason !== 'needs_decision' && (
+            <button onClick={setNeedsDecision} disabled={busy}
+              title="Pending a named decision-maker"
+              className="text-[11.5px] px-2 py-0.5 rounded-md"
+              style={{ color: 'var(--ink-text-muted)' }}>
+              Needs decision
+            </button>
+          )}
+          <button onClick={() => closeTopic('cancelled')} disabled={busy}
+            title="No longer relevant"
             className="text-[11.5px] px-2 py-0.5 rounded-md"
             style={{ color: 'var(--ink-text-muted)' }}>
-            Park
+            Not relevant
+          </button>
+          {!topic.parentTopicId && (
+            <button onClick={() => setSubOpen((v) => !v)} disabled={busy}
+              title="This discussion revealed something that's now its own topic"
+              className="text-[11.5px] px-2 py-0.5 rounded-md"
+              style={{ color: 'var(--ink-text-muted)' }}>
+              + Subtopic
+            </button>
+          )}
+        </div>
+      )}
+
+      {subOpen && (
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            if (!subTitle.trim() || busy) return;
+            setBusy(true);
+            try {
+              await api(`/huddles/${huddleId}/topics`, {
+                method: 'POST', body: { title: subTitle.trim(), parentTopicId: topic.id },
+              });
+              setSubTitle(''); setSubOpen(false);
+              onChange();
+            } finally { setBusy(false); }
+          }}
+          className="mt-2 rounded-md p-1.5"
+          style={{ background: 'var(--ink-surface)', border: '1px solid var(--ink-accent)' }}
+        >
+          <input
+            autoFocus value={subTitle} onChange={(e) => setSubTitle(e.target.value)}
+            placeholder="Subtopic — what came out of this?"
+            className="w-full px-1.5 py-1 text-[12.5px] bg-transparent outline-none"
+            style={{ color: 'var(--ink-text)' }}
+            onKeyDown={(e) => { if (e.key === 'Escape') { setSubOpen(false); setSubTitle(''); } }}
+          />
+          <div className="flex items-center gap-1.5 mt-1">
+            <button type="submit" disabled={!subTitle.trim() || busy}
+              className="text-[11px] px-2 py-0.5 rounded-md"
+              style={{ background: 'var(--ink-accent)', color: 'var(--ink-on-accent)', fontWeight: 600, opacity: !subTitle.trim() ? 0.5 : 1 }}>
+              Add
+            </button>
+            <button type="button" onClick={() => { setSubOpen(false); setSubTitle(''); }}
+              className="text-[11px]" style={{ color: 'var(--ink-text-muted)' }}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+
+      {!isOpen && !editing && (
+        <div className="flex items-center gap-1.5 mt-2">
+          <button onClick={reopen} disabled={busy}
+            className="text-[11.5px] px-2 py-0.5 rounded-md"
+            style={{ color: 'var(--ink-text-muted)' }}>
+            Reopen
           </button>
         </div>
       )}
@@ -953,6 +1315,58 @@ function TopicCard({
             </button>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+// Badges under a topic title: what state it's in, who owns it, who can call
+// it, and whether it has been round the loop before.
+function TopicStateRow({ topic, hasDecisions }: { topic: HuddleTopic; hasDecisions: boolean }) {
+  const chips: { label: string; bg: string; fg: string }[] = [];
+
+  if (topic.status === 'closed') {
+    chips.push(hasDecisions
+      ? { label: 'Decided', bg: 'var(--ink-accent-subtle)', fg: 'var(--ink-done)' }
+      : { label: 'Closed', bg: 'var(--ink-surface-raised)', fg: 'var(--ink-text-secondary)' });
+  } else if (topic.status === 'cancelled') {
+    chips.push({ label: 'Not relevant', bg: 'var(--ink-surface-raised)', fg: 'var(--ink-text-muted)' });
+  } else if (topic.openReason === 'needs_decision') {
+    chips.push({ label: 'Needs decision', bg: 'var(--ink-accent-subtle)', fg: 'var(--ink-blocked)' });
+  } else if (topic.openReason === 'deferred') {
+    chips.push({
+      label: topic.deferCount > 0 ? `Deferred ×${topic.deferCount}` : 'Deferred',
+      bg: 'var(--ink-surface-raised)', fg: 'var(--ink-text-secondary)',
+    });
+  }
+
+  if (topic.horizon === 'long_term') {
+    chips.push({ label: 'Long-term', bg: 'var(--ink-surface-raised)', fg: 'var(--ink-text-muted)' });
+  }
+
+  const people: string[] = [];
+  if (topic.ownerName) people.push(topic.ownerName);
+  if (topic.approverName) people.push(`approves: ${topic.approverName}`);
+  // The specific diagnosis for a stuck topic: someone owns it, nobody can call it.
+  if (topic.status === 'open' && topic.openReason === 'needs_decision' && !topic.approverName) {
+    chips.push({ label: 'No decision-maker', bg: 'var(--ink-surface-raised)', fg: 'var(--ink-blocked)' });
+  }
+
+  if (chips.length === 0 && people.length === 0) return null;
+
+  return (
+    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+      {chips.map((c) => (
+        <span key={c.label}
+          className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+          style={{ background: c.bg, color: c.fg, fontWeight: 600, letterSpacing: '0.05em' }}>
+          {c.label}
+        </span>
+      ))}
+      {people.length > 0 && (
+        <span className="text-[11px]" style={{ color: 'var(--ink-text-muted)' }}>
+          {people.join(' · ')}
+        </span>
       )}
     </div>
   );

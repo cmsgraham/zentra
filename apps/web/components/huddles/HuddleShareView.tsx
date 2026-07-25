@@ -23,7 +23,8 @@ interface SharedSummary {
     id: string;
     title: string;
     context: string | null;
-    status: 'open' | 'decided' | 'parked';
+    status: 'open' | 'closed' | 'cancelled';
+    openReason?: 'deferred' | 'needs_decision' | null;
     decisions: Array<{ decisionText: string; ownerName: string | null }>;
   }>;
   intentions: Array<{
@@ -185,8 +186,8 @@ export function HuddleShareView({ token }: { token: string }) {
           </Section>
         )}
 
-        {/* Topics (any not decided) */}
-        {topics.some((t) => t.status !== 'decided') && (
+        {/* Topics (any that didn't close with a decision) */}
+        {topics.some((t) => t.status !== 'closed' || t.decisions.length === 0) && (
           <Section title="Topics discussed">
             <ul className="space-y-2">
               {topics.map((t) => (
@@ -207,7 +208,13 @@ export function HuddleShareView({ token }: { token: string }) {
                         letterSpacing: '0.04em',
                       }}
                     >
-                      {t.status}
+                      {t.status === 'closed'
+                        ? (t.decisions.length > 0 ? 'decided' : 'closed')
+                        : t.status === 'cancelled'
+                          ? 'not relevant'
+                          : t.openReason === 'needs_decision'
+                            ? 'needs decision'
+                            : t.openReason === 'deferred' ? 'deferred' : 'open'}
                     </span>
                   </div>
                   {t.context && (
