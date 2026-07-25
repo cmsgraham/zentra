@@ -316,6 +316,94 @@ async function loadHuddleOrThrow(app: FastifyInstance, huddleId: string, userId:
   throw new ForbiddenError('You do not have access to this huddle');
 }
 
+// ─── Carry-forward ────────────────────────────────────────────────────────
+// Copies unresolved topics from the previous huddle in the same series into a
+// newly created one. Every huddle keeps its own row, so a topic's state in an
+// earlier huddle stays an accurate record of what was true at that meeting —
+// closing a carried copy never rewrites history. carried_from_topic_id is
+// lineage only; nothing reads back through it to mutate the source.
+async function carryForwardTopics(client: any, newHuddleId: string, huddle: any) {
+  // Series identity, most specific first: the template it was started from,
+  // else the workspace+type pairing, else the host (personal huddles).
+  let sql: string;
+  let params: any[];
+  // Source must be a closed huddle: a topic only counts as unresolved once the
+  // meeting actually ended. Pulling from a draft/active one would duplicate
+  // work still live on another board.
+  if (huddle.template_id) {
+    sql = `SELECT id FROM huddles WHERE template_id = $1 AND id <> $2 AND status = 'closed'
+           ORDER BY COALESCE(ended_at, scheduled_at, created_at) DESC LIMIT 1`;
+    params = [huddle.template_id, newHuddleId];
+  } else if (huddle.workspace_id) {
+    sql = `SELECT id FROM huddles
+            WHERE workspace_id = $1 AND type = $2 AND id <> $3 AND status = 'closed'
+            ORDER BY COALESCE(ended_at, scheduled_at, created_at) DESC LIMIT 1`;
+    params = [huddle.workspace_id, huddle.type, newHuddleId];
+  } else {
+    sql = `SELECT id FROM huddles
+            WHERE host_user_id = $1 AND type = $2 AND workspace_id IS NULL
+              AND id <> $3 AND status = 'closed'
+            ORDER BY COALESCE(ended_at, scheduled_at, created_at) DESC LIMIT 1`;
+    params = [huddle.host_user_id, huddle.type, newHuddleId];
+  }
+
+  // Only the immediately-previous huddle, never the whole history — otherwise a
+  // topic open since week one would be copied once per past meeting.
+  const prev = await client.query(sql, params);
+  if (prev.rows.length === 0) return 0;
+
+  // Only short_term rides the loop. long_term was deliberately moved out of the
+  // weekly rotation and should not keep reappearing.
+  const open = await client.query(
+    `SELECT * FROM huddle_topics
+      WHERE huddle_id = $1 AND status = 'open' AND horizon = 'short_term'
+      ORDER BY sort_order ASC, created_at ASC`,
+    [prev.rows[0].id],
+  );
+  if (open.rows.length === 0) return 0;
+
+  // Sit carried topics after anything already seeded (e.g. template topics).
+  const maxRes = await client.query(
+    `SELECT COALESCE(MAX(sort_order), -1) AS m FROM huddle_topics WHERE huddle_id = $1`,
+    [newHuddleId],
+  );
+  let order = Number(maxRes.rows[0].m) + 1;
+
+  const idMap = new Map<string, string>();
+  for (const t of open.rows) {
+    const ins = await client.query(
+      `INSERT INTO huddle_topics
+         (huddle_id, title, context, details, sort_order, status, open_reason, horizon,
+          owner_user_id, approver_user_id, defer_count, carried_from_topic_id)
+       VALUES ($1, $2, $3, $4, $5, 'open', $6, 'short_term', $7, $8, $9, $10)
+       RETURNING id`,
+      [
+        newHuddleId, t.title, t.context, t.details, order++,
+        // An untriaged topic that survives a meeting has, in effect, been deferred.
+        t.open_reason ?? 'deferred',
+        t.owner_user_id, t.approver_user_id,
+        (t.defer_count ?? 0) + 1, t.id,
+      ],
+    );
+    idMap.set(t.id, ins.rows[0].id);
+  }
+
+  // Second pass: re-point subtopics at the new parent rows, so nesting survives
+  // the hop instead of the children surfacing as roots.
+  for (const t of open.rows) {
+    if (!t.parent_topic_id) continue;
+    const newParent = idMap.get(t.parent_topic_id);
+    const newChild = idMap.get(t.id);
+    if (!newParent || !newChild) continue;
+    await client.query(
+      `UPDATE huddle_topics SET parent_topic_id = $1 WHERE id = $2`,
+      [newParent, newChild],
+    );
+  }
+
+  return idMap.size;
+}
+
 function requireHost(huddle: any, userId: string) {
   if (huddle.host_user_id !== userId) throw new ForbiddenError('Only the host can perform this action');
 }
@@ -749,6 +837,9 @@ export default async function huddleRoutes(app: FastifyInstance) {
           [huddle.id, body.workspaceId, body.type],
         );
       }
+
+      // Unresolved topics from the previous huddle in this series follow it in.
+      await carryForwardTopics(client, huddle.id, huddle);
 
       await client.query('COMMIT');
       return reply.status(201).send({ huddle: formatHuddle(huddle) });
@@ -2032,6 +2123,10 @@ export default async function huddleRoutes(app: FastifyInstance) {
         [huddle.id, t.title, t.context ?? null, order++],
       );
     }
+
+    // Then anything still unresolved from the previous huddle in this series,
+    // ordered after the template's own topics.
+    await carryForwardTopics(app.pg, huddle.id, huddle);
 
     return reply.status(201).send({ huddle: formatHuddle(huddle) });
   });
