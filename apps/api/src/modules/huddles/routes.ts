@@ -428,16 +428,29 @@ async function createTaskForIntention(
   priorityForToday = false,
 ): Promise<string> {
   const today = new Date().toISOString().slice(0, 10);
+
+  // Board lanes order by lane_order with NULLs last, and new tasks normally
+  // get NULL — which drops a fresh commitment into the middle of a busy
+  // column, below the fold. A next step someone just committed to in a meeting
+  // should be the first thing they see, so place it at the top of the lane.
+  const laneRes = await client.query(
+    `SELECT COALESCE(MIN(lane_order), 1024) - 1024 AS lane
+       FROM tasks
+      WHERE workspace_id = $1 AND status = 'pending' AND archived = false`,
+    [workspaceId],
+  );
+  const laneOrder = laneRes.rows[0]?.lane ?? 0;
+
   const cols = ['workspace_id', 'title', 'status', 'priority', 'next_action',
-    'next_action_state', 'creator_id', 'assignee_id', 'due_date'];
-  const vals = ['$1', '$2', `'pending'`, `'medium'`, '$3', `'set'`, '$4', '$5', '$6'];
+    'next_action_state', 'creator_id', 'assignee_id', 'due_date', 'lane_order'];
+  const vals = ['$1', '$2', `'pending'`, `'medium'`, '$3', `'set'`, '$4', '$5', '$6', '$7'];
   const params: any[] = [
     workspaceId, intent.text, intent.text, userId,
-    intent.owner_user_id ?? null, intent.due_date ?? null,
+    intent.owner_user_id ?? null, intent.due_date ?? null, laneOrder,
   ];
   if (priorityForToday) {
     cols.push('priority_for_date', 'priority_for_user_id');
-    vals.push('$7', '$8');
+    vals.push('$8', '$9');
     params.push(today, intent.owner_user_id ?? null);
   }
   const taskRes = await client.query(
