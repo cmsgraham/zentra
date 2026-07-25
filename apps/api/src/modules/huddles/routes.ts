@@ -763,7 +763,11 @@ export default async function huddleRoutes(app: FastifyInstance) {
        FROM huddles f
        LEFT JOIN users u ON u.id = f.host_user_id
        WHERE ${conds.join(' AND ')}
-       ORDER BY lower(f.title) ASC
+       -- Meetings are a timeline, not an index. Alphabetical ordering made
+       -- repeat huddles from one template (which all share the template's
+       -- default title) land in an arbitrary order, so opening "the" huddle
+       -- could take you to any occurrence of it.
+       ORDER BY COALESCE(f.scheduled_at, f.started_at, f.created_at) DESC
        LIMIT 200`,
       params,
     );
