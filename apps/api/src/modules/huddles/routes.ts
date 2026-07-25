@@ -416,6 +416,42 @@ async function carryForwardTopics(client: any, newHuddleId: string, huddle: any)
   return idMap.size;
 }
 
+// Creates the workspace task that backs an action item, and links the
+// intention to it. Shared by "+ Action" (which converts immediately) and the
+// explicit Convert button, so the two can't drift apart.
+// creator_id is NOT NULL — omitting it was why conversion used to 500.
+async function createTaskForIntention(
+  client: any,
+  intent: any,
+  workspaceId: string,
+  userId: string,
+  priorityForToday = false,
+): Promise<string> {
+  const today = new Date().toISOString().slice(0, 10);
+  const cols = ['workspace_id', 'title', 'status', 'priority', 'next_action',
+    'next_action_state', 'creator_id', 'assignee_id', 'due_date'];
+  const vals = ['$1', '$2', `'pending'`, `'medium'`, '$3', `'set'`, '$4', '$5', '$6'];
+  const params: any[] = [
+    workspaceId, intent.text, intent.text, userId,
+    intent.owner_user_id ?? null, intent.due_date ?? null,
+  ];
+  if (priorityForToday) {
+    cols.push('priority_for_date', 'priority_for_user_id');
+    vals.push('$7', '$8');
+    params.push(today, intent.owner_user_id ?? null);
+  }
+  const taskRes = await client.query(
+    `INSERT INTO tasks (${cols.join(', ')}) VALUES (${vals.join(', ')}) RETURNING id`,
+    params,
+  );
+  const taskId = taskRes.rows[0].id;
+  await client.query(
+    `UPDATE huddle_intentions SET linked_task_id = $1, updated_at = now() WHERE id = $2`,
+    [taskId, intent.id],
+  );
+  return taskId;
+}
+
 function requireHost(huddle: any, userId: string) {
   if (huddle.host_user_id !== userId) throw new ForbiddenError('Only the host can perform this action');
 }
@@ -1649,7 +1685,7 @@ export default async function huddleRoutes(app: FastifyInstance) {
     const userId = request.user.sub;
     const { id } = request.params as { id: string };
     const body = createIntentionSchema.parse(request.body);
-    await loadHuddleOrThrow(app, id, userId);
+    const huddle = await loadHuddleOrThrow(app, id, userId);
     const orderRes = await app.pg.query(
       `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM huddle_intentions WHERE huddle_id = $1`, [id],
     );
@@ -1663,7 +1699,35 @@ export default async function huddleRoutes(app: FastifyInstance) {
         body.details ?? null, orderRes.rows[0].next,
       ],
     );
-    return reply.status(201).send({ intention: formatIntention(r.rows[0]) });
+    let intention = r.rows[0];
+
+    // Action items belong in the task tracker, so a huddle with a workspace
+    // creates the task straight away and the huddle just references it.
+    // Personal huddles have no workspace, so those stay local until converted.
+    if (huddle.workspace_id) {
+      try {
+        await createTaskForIntention(app.pg, intention, huddle.workspace_id, userId);
+        const re = await app.pg.query(
+          `SELECT i.*, u.name AS owner_name,
+                  tk.status AS linked_task_status, tk.due_date AS linked_task_due_date
+             FROM huddle_intentions i
+             LEFT JOIN users u ON u.id = i.owner_user_id
+             LEFT JOIN tasks tk ON tk.id = i.linked_task_id
+            WHERE i.id = $1`,
+          [intention.id],
+        );
+        intention = re.rows[0];
+      } catch (err) {
+        // Keep the action item rather than losing what was typed; the explicit
+        // Convert button remains available as a fallback.
+        app.log.error(
+          { err: (err as Error).message, intentionId: intention.id },
+          'auto-convert of huddle action item to task failed',
+        );
+      }
+    }
+
+    return reply.status(201).send({ intention: formatIntention(intention) });
   });
 
   app.put('/huddles/:id/intentions/reorder', { preHandler: [app.authenticate] }, async (request) => {
@@ -1758,28 +1822,17 @@ export default async function huddleRoutes(app: FastifyInstance) {
       return { intention: formatIntention(intent), alreadyLinked: true };
     }
 
-    const today = new Date().toISOString().slice(0, 10);
-    // creator_id is NOT NULL and was previously omitted, so every conversion
-    // failed with a not-null violation. Owner and due date now carry across too,
-    // so the task tracker holds the real state and the huddle just references it.
-    const taskRes = await app.pg.query(
-      `INSERT INTO tasks
-         (workspace_id, title, status, priority, next_action, next_action_state,
-          creator_id, assignee_id, due_date${body.priorityForToday ? ', priority_for_date, priority_for_user_id' : ''})
-       VALUES ($1, $2, 'pending', 'medium', $3, 'set',
-               $4, $5, $6${body.priorityForToday ? ', $7, $8' : ''})
-       RETURNING id`,
-      body.priorityForToday
-        ? [body.workspaceId, intent.text, intent.text, userId, intent.owner_user_id,
-           intent.due_date ?? null, today, intent.owner_user_id]
-        : [body.workspaceId, intent.text, intent.text, userId, intent.owner_user_id,
-           intent.due_date ?? null],
+    const taskId = await createTaskForIntention(
+      app.pg, intent, body.workspaceId, userId, body.priorityForToday,
     );
-    const taskId = taskRes.rows[0].id;
     const updated = await app.pg.query(
-      `UPDATE huddle_intentions SET linked_task_id = $1, updated_at = now()
-       WHERE id = $2 RETURNING *`,
-      [taskId, iid],
+      `SELECT i.*, u.name AS owner_name,
+              tk.status AS linked_task_status, tk.due_date AS linked_task_due_date
+         FROM huddle_intentions i
+         LEFT JOIN users u ON u.id = i.owner_user_id
+         LEFT JOIN tasks tk ON tk.id = i.linked_task_id
+        WHERE i.id = $1`,
+      [iid],
     );
     return reply.status(201).send({ intention: formatIntention(updated.rows[0]), taskId });
   });
