@@ -1,0 +1,44 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "mi lista zentra",
+      "intents": [
+        { "name": "AMAZON.CancelIntent", "samples": [] },
+        { "name": "AMAZON.HelpIntent", "samples": [] },
+        { "name": "AMAZON.StopIntent", "samples": [] },
+        { "name": "AMAZON.NavigateHomeIntent", "samples": [] },
+        {
+          "name": "AddItemIntent",
+          "slots": [
+            { "name": "item", "type": "AMAZON.SearchQuery" },
+            { "name": "list", "type": "ZentraListName" }
+          ],
+          "samples": [
+            "agrega {item}",
+            "agregar {item}",
+            "añade {item}",
+            "añadir {item}",
+            "apunta {item}",
+            "anota {item}",
+            "agrega {item} a la lista",
+            "añade {item} a la lista",
+            "agrega {item} a la lista de {list}",
+            "añade {item} a la lista de {list}",
+            "apunta {item} en {list}",
+            "anota {item} en la lista de {list}"
+          ]
+        }
+      ],
+      "types": [
+        {
+          "name": "ZentraListName",
+          "values": [
+            { "name": { "value": "casa" } },
+            { "name": { "value": "oficina" } },
+            { "name": { "value": "super", "synonyms": ["supermercado", "mandado"] } }
+          ]
+        }
+      ]
+    }
+  }
+}
