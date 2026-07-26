@@ -127,6 +127,88 @@ function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
+export interface HuddleInviteEmailPayload {
+  huddleTitle: string;
+  hostName: string | null;
+  intention: string | null;
+  scheduledAt: string | null;
+  topics: string[];
+  /** Link into the app. Omitted for external guests, who have no account. */
+  huddleUrl: string | null;
+  /** External guests get a note explaining they'll receive the summary. */
+  isExternal: boolean;
+}
+
+export function huddleInviteEmail(p: HuddleInviteEmailPayload): { subject: string; text: string; html: string } {
+  const subject = p.hostName
+    ? `${p.hostName} invited you to: ${p.huddleTitle}`
+    : `You're invited to: ${p.huddleTitle}`;
+
+  const when = p.scheduledAt ? new Date(p.scheduledAt).toLocaleString() : null;
+
+  // ── Plain text ──────────────────────────────────────────────────────────
+  const txt: string[] = [];
+  txt.push(subject);
+  if (when) txt.push(`When: ${when}`);
+  if (p.hostName) txt.push(`Host: ${p.hostName}`);
+  if (p.intention) txt.push(`\nWhat this is for:\n${p.intention}`);
+  if (p.topics.length) {
+    txt.push('\nOn the agenda:');
+    for (const t of p.topics) txt.push(`  - ${t}`);
+  }
+  if (p.huddleUrl) {
+    txt.push(`\nOpen the huddle: ${p.huddleUrl}`);
+  } else if (p.isExternal) {
+    txt.push(
+      '\nYou do not need a Zentra account to take part. ' +
+      'A written summary — decisions, next steps and follow-ups — will be emailed to you once the huddle is closed.',
+    );
+  }
+
+  // ── HTML ────────────────────────────────────────────────────────────────
+  const parts: string[] = [];
+  const meta: string[] = [];
+  if (when) meta.push(`<strong>When:</strong> ${escapeHtml(when)}`);
+  if (p.hostName) meta.push(`<strong>Host:</strong> ${escapeHtml(p.hostName)}`);
+  if (meta.length) {
+    parts.push(`<p style="margin:0 0 14px;font-size:14px;color:#4a5070;">${meta.join(' &middot; ')}</p>`);
+  }
+  if (p.intention) {
+    parts.push(
+      `<p style="margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#8a90a8;">What this is for</p>
+       <p style="margin:0 0 18px;font-size:15px;line-height:1.5;">${escapeHtml(p.intention)}</p>`,
+    );
+  }
+  if (p.topics.length) {
+    const items = p.topics
+      .map((t) => `<li style="margin:0 0 6px;">${escapeHtml(t)}</li>`)
+      .join('');
+    parts.push(
+      `<p style="margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#8a90a8;">On the agenda</p>
+       <ul style="margin:0 0 18px;padding-left:18px;font-size:14px;line-height:1.5;">${items}</ul>`,
+    );
+  }
+  if (p.huddleUrl) {
+    parts.push(
+      `<p style="margin:18px 0 0;"><a href="${p.huddleUrl}"
+        style="display:inline-block;background:#191f4a;color:#fff;text-decoration:none;padding:10px 18px;border-radius:999px;font-size:14px;font-weight:600;">
+        Open the huddle</a></p>`,
+    );
+  } else if (p.isExternal) {
+    parts.push(
+      `<p style="margin:18px 0 0;font-size:13px;color:#4a5070;line-height:1.5;">
+        You don't need a ${BRAND} account to take part. A written summary — decisions,
+        next steps and follow-ups — will be emailed to you once the huddle is closed.</p>`,
+    );
+  }
+
+  return {
+    subject,
+    text: txt.join('\n'),
+    html: baseTemplate(escapeHtml(p.huddleTitle), parts.join('')),
+  };
+}
+
 export function huddleSummaryEmail(p: HuddleSummaryEmailPayload): { subject: string; text: string; html: string } {
   const subject = `Huddle summary: ${p.huddleTitle}`;
 

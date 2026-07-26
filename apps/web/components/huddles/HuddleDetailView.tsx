@@ -273,6 +273,30 @@ function HuddleHeader({
     try { await api(`/huddles/${huddle.id}/check-in`, { method: 'POST', body: {} }); onChange(); }
     finally { setBusy(false); }
   }
+  async function sendInvites() {
+    const withEmail = huddle.participants.filter(
+      (p) => p.userId !== huddle.hostUserId && (p.userEmail || p.externalEmail),
+    ).length;
+    if (withEmail === 0) {
+      alert('No one to invite yet — add participants or guests with an email address first.');
+      return;
+    }
+    if (!confirm(`Email the invite to ${withEmail} ${withEmail === 1 ? 'person' : 'people'}?`)) return;
+    setBusy(true);
+    try {
+      const res = await api<{ sentTo: string[]; failed: string[] }>(
+        `/huddles/${huddle.id}/invite`, { method: 'POST', body: {} },
+      );
+      const failed = res.failed?.length ?? 0;
+      alert(
+        failed === 0
+          ? `Invite sent to ${res.sentTo.length} ${res.sentTo.length === 1 ? 'person' : 'people'}.`
+          : `Sent ${res.sentTo.length}, failed ${failed}: ${res.failed.join(', ')}`,
+      );
+    } catch (e: any) {
+      alert(e?.message ?? 'Could not send invites');
+    } finally { setBusy(false); }
+  }
 
   const presentCount = huddle.participants.filter((p) => p.attendanceStatus === 'present').length;
 
@@ -298,6 +322,14 @@ function HuddleHeader({
               style={{ background: 'var(--ink-surface-raised)', color: 'var(--ink-text)', fontWeight: 550, border: '1px solid var(--ink-border-subtle)' }}
             >
               I’m here
+            </button>
+          )}
+          {isHost && huddle.status !== 'closed' && (
+            <button onClick={sendInvites} disabled={busy}
+              title="Email the invite to participants and outside guests"
+              className="px-3 py-1.5 rounded-full text-[12.5px]"
+              style={{ background: 'var(--ink-surface-raised)', color: 'var(--ink-text)', fontWeight: 550, border: '1px solid var(--ink-border-subtle)' }}>
+              Send invites
             </button>
           )}
           {isHost && huddle.status === 'draft' && (

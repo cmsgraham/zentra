@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import { BadRequestError, NotFoundError, ForbiddenError } from '../../lib/errors.js';
-import { sendMail, huddleSummaryEmail } from '../../lib/mailer.js';
+import { sendMail, huddleSummaryEmail, huddleInviteEmail } from '../../lib/mailer.js';
 import { getEnv } from '../../lib/env.js';
 
 // ─── Schemas ──────────────────────────────────────────────────────────────
@@ -1204,6 +1204,70 @@ export default async function huddleRoutes(app: FastifyInstance) {
       includeShareLink: body.includeShareLink,
     });
     return result;
+  });
+
+  // ── Invites ────────────────────────────────────────────────────────────
+  // Emails everyone on the huddle who has an address — app users and external
+  // guests alike. Explicit rather than automatic on create: huddles start as
+  // drafts and are often set up well before anyone should be told about them.
+  app.post('/huddles/:id/invite', { preHandler: [app.authenticate] }, async (request) => {
+    const userId = request.user.sub;
+    const { id } = request.params as { id: string };
+    const body = z.object({
+      // Re-inviting is allowed; this only narrows the send when set.
+      onlyExternal: z.boolean().optional().default(false),
+    }).parse(request.body ?? {});
+
+    const huddle = await loadHuddleOrThrow(app, id, userId);
+    requireHost(huddle, userId);
+
+    const [hostRow, recipients, topics] = await Promise.all([
+      app.pg.query('SELECT name FROM users WHERE id = $1', [huddle.host_user_id]),
+      app.pg.query(
+        `SELECT u.email AS email, u.name AS name, false AS is_external
+           FROM huddle_participants p
+           JOIN users u ON u.id = p.user_id
+          WHERE p.huddle_id = $1 AND p.user_id <> $2 AND COALESCE(u.email, '') <> ''
+         UNION ALL
+         SELECT p.external_email AS email, p.external_name AS name, true AS is_external
+           FROM huddle_participants p
+          WHERE p.huddle_id = $1 AND p.user_id IS NULL
+            AND COALESCE(p.external_email, '') <> ''`,
+        [id, huddle.host_user_id],
+      ),
+      app.pg.query(
+        `SELECT title FROM huddle_topics
+          WHERE huddle_id = $1 AND status = 'open'
+          ORDER BY sort_order ASC, created_at ASC LIMIT 12`,
+        [id],
+      ),
+    ]);
+
+    const base = (getEnv().APP_URL ?? '').replace(/\/$/, '');
+    const topicTitles = topics.rows.map((t: any) => t.title);
+    const sentTo: string[] = [];
+    const failed: string[] = [];
+
+    for (const r of recipients.rows) {
+      if (body.onlyExternal && !r.is_external) continue;
+      const tpl = huddleInviteEmail({
+        huddleTitle: huddle.title,
+        hostName: hostRow.rows[0]?.name ?? null,
+        intention: huddle.intention,
+        scheduledAt: huddle.scheduled_at,
+        topics: topicTitles,
+        // External guests have no account, so an app link would dead-end them.
+        huddleUrl: r.is_external || !base ? null : `${base}/huddles/${id}`,
+        isExternal: !!r.is_external,
+      });
+      const ok = await sendMail(
+        { to: r.email, subject: tpl.subject, text: tpl.text, html: tpl.html },
+        app.log,
+      );
+      (ok ? sentTo : failed).push(r.email);
+    }
+
+    return { sentTo, failed, total: sentTo.length + failed.length };
   });
 
   // ── Participants ───────────────────────────────────────────────────────

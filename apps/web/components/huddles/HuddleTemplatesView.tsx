@@ -31,6 +31,7 @@ const emptyDraft = (): Draft => ({
   defaultTitle: '',
   defaultIntention: '',
   defaultParticipantUserIds: [],
+  defaultExternalAttendees: [],
   defaultTopics: [{ title: '', context: '' }],
   emailSummaryToParticipants: false,
 });
@@ -42,6 +43,9 @@ interface Draft {
   defaultTitle: string;
   defaultIntention: string;
   defaultParticipantUserIds: string[];
+  // Guests without a Zentra account. Persisted on the template so recurring
+  // huddles keep their outside attendees instead of re-adding them each time.
+  defaultExternalAttendees: { name: string; email: string }[];
   defaultTopics: { title: string; context: string }[];
   emailSummaryToParticipants: boolean;
 }
@@ -54,6 +58,10 @@ function fromTemplate(t: Template): Draft {
     defaultTitle: t.defaultTitle,
     defaultIntention: t.defaultIntention ?? '',
     defaultParticipantUserIds: [...(t.defaultParticipantUserIds ?? [])],
+    defaultExternalAttendees: (t.defaultExternalAttendees ?? []).map((a) => ({
+      name: a.name,
+      email: a.email ?? '',
+    })),
     defaultTopics: (t.defaultTopics ?? []).map((x) => ({
       title: x.title,
       context: x.context ?? '',
@@ -399,6 +407,26 @@ function TemplateEditorModal({
     });
   }
 
+  function addExternal() {
+    setDraft((d) => ({
+      ...d,
+      defaultExternalAttendees: [...d.defaultExternalAttendees, { name: '', email: '' }],
+    }));
+  }
+  function updateExternal(i: number, patch: Partial<{ name: string; email: string }>) {
+    setDraft((d) => {
+      const next = [...d.defaultExternalAttendees];
+      next[i] = { ...next[i], ...patch };
+      return { ...d, defaultExternalAttendees: next };
+    });
+  }
+  function removeExternal(i: number) {
+    setDraft((d) => ({
+      ...d,
+      defaultExternalAttendees: d.defaultExternalAttendees.filter((_, idx) => idx !== i),
+    }));
+  }
+
   function updateTopic(i: number, patch: Partial<{ title: string; context: string }>) {
     setDraft((d) => {
       const next = [...d.defaultTopics];
@@ -430,6 +458,9 @@ function TemplateEditorModal({
         defaultTitle: draft.defaultTitle.trim(),
         defaultIntention: draft.defaultIntention.trim() || null,
         defaultParticipantUserIds: draft.type === 'team' ? draft.defaultParticipantUserIds : [],
+        defaultExternalAttendees: draft.defaultExternalAttendees
+          .filter((a) => a.name.trim())
+          .map((a) => ({ name: a.name.trim(), email: a.email.trim() || null })),
         defaultTopics: draft.defaultTopics
           .filter((t) => t.title.trim())
           .map((t) => ({ title: t.title.trim(), context: t.context.trim() || null })),
@@ -575,6 +606,56 @@ function TemplateEditorModal({
               </div>
             </Field>
           )}
+
+          {/* Guests without a Zentra account. Stored on the template so a
+              recurring huddle keeps its outside attendees, and so they receive
+              the invite and the closing summary by email. */}
+          <Field label={`Guests outside Zentra (${draft.defaultExternalAttendees.length})`}>
+            <div className="space-y-2">
+              {draft.defaultExternalAttendees.map((a, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input
+                    value={a.name}
+                    onChange={(e) => updateExternal(i, { name: e.target.value })}
+                    placeholder="Name"
+                    aria-label={`Guest ${i + 1} name`}
+                    className="flex-1 min-w-0 px-2.5 py-1.5 rounded-md text-[13px]"
+                    style={{ background: 'var(--ink-bg)', color: 'var(--ink-text)', border: '1px solid var(--ink-border)' }}
+                  />
+                  <input
+                    value={a.email}
+                    onChange={(e) => updateExternal(i, { email: e.target.value })}
+                    placeholder="Email (for invite + summary)"
+                    aria-label={`Guest ${i + 1} email`}
+                    type="email"
+                    className="flex-1 min-w-0 px-2.5 py-1.5 rounded-md text-[13px]"
+                    style={{ background: 'var(--ink-bg)', color: 'var(--ink-text)', border: '1px solid var(--ink-border)' }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeExternal(i)}
+                    aria-label={`Remove guest ${i + 1}`}
+                    className="shrink-0 px-2 text-[13px]"
+                    style={{ color: 'var(--ink-text-muted)' }}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={addExternal}
+                className="text-[12.5px] px-2.5 py-1.5 rounded-md"
+                style={{ background: 'var(--ink-surface)', color: 'var(--ink-text)', border: '1px dashed var(--ink-border)' }}
+              >
+                + Add a guest
+              </button>
+              <p className="text-[11.5px]" style={{ color: 'var(--ink-text-muted)' }}>
+                Guests need no account. With an email address they receive the invite and,
+                once the huddle closes, the written summary.
+              </p>
+            </div>
+          </Field>
 
           {draft.type === 'team' && (
             <label
