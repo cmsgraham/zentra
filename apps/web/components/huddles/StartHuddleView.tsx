@@ -421,6 +421,9 @@ export function StartHuddleView() {
                     key={m.id}
                     type="button"
                     onClick={() => toggleMember(m.id)}
+                    // Selection was conveyed only by colour and weight, so the
+                    // invited/not-invited state was invisible to screen readers.
+                    aria-pressed={on}
                     className="w-full flex items-center gap-3 px-2.5 py-2 rounded-md text-left transition-all"
                     style={{
                       background: on ? 'var(--ink-accent-light)' : 'transparent',
