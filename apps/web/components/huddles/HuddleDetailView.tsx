@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
+import { TOPIC_LIVE_STATUSES } from './types';
 import type {
   HuddleDetail, HuddleSignal, HuddleTopic, HuddleDecision, HuddleIntention, HuddleFollowup,
 } from './types';
@@ -579,6 +580,15 @@ function TeamBoard({
 // Renders topics with subtopics nested one level under their parent, so a
 // parent can close on its own terms while its children stay in the loop.
 // Only root topics take part in drag-reorder; children follow their parent.
+// On a closed huddle the topic's live status can have moved on at a later
+// meeting, so show what it was left at when THIS one ended.
+function displayStatusFor(huddle: HuddleDetail, topic: HuddleTopic) {
+  if (huddle.status === 'closed' && topic.outcomeState) {
+    return topic.outcomeState as HuddleTopic['status'];
+  }
+  return topic.status;
+}
+
 function renderTopicTree(
   huddle: HuddleDetail,
   onChange: () => void,
@@ -596,7 +606,8 @@ function renderTopicTree(
     }
   }
   const roots = huddle.topics.filter((t) => !t.parentTopicId || !byId.has(t.parentTopicId));
-  const hasOpenChild = (id: string) => (childrenOf.get(id) ?? []).some((c) => c.status === 'open');
+  const hasOpenChild = (id: string) =>
+    (childrenOf.get(id) ?? []).some((c) => TOPIC_LIVE_STATUSES.includes(c.status));
 
   return roots.map((t) => {
     const kids = childrenOf.get(t.id) ?? [];
@@ -605,6 +616,7 @@ function renderTopicTree(
         <TopicCard
           topic={t} participants={huddle.participants} huddleId={huddle.id}
           onChange={onChange} hasOpenChild={hasOpenChild(t.id)}
+          displayStatus={displayStatusFor(huddle, t)}
         />
         {kids.length > 0 && (
           <div
@@ -615,6 +627,7 @@ function renderTopicTree(
               <TopicCard
                 key={c.id} topic={c} participants={huddle.participants} huddleId={huddle.id}
                 onChange={onChange} hasOpenChild={hasOpenChild(c.id)}
+                displayStatus={displayStatusFor(huddle, c)}
               />
             ))}
           </div>
@@ -1026,11 +1039,14 @@ function SignalCard({ signal, huddleId, onChange }: { signal: HuddleSignal; hudd
 }
 
 function TopicCard({
-  topic, participants, huddleId, onChange, hasOpenChild = false,
+  topic, participants, huddleId, onChange, hasOpenChild = false, displayStatus,
 }: {
   topic: HuddleTopic; participants: HuddleDetail['participants']; huddleId: string;
   onChange: () => void; hasOpenChild?: boolean;
+  // What this meeting left the topic at; may differ from its live status.
+  displayStatus?: HuddleTopic['status'];
 }) {
+  const shown = displayStatus ?? topic.status;
   const [decideOpen, setDecideOpen] = useState(false);
   const [decision, setDecision] = useState('');
   const [owner, setOwner] = useState<string>('');
@@ -1087,11 +1103,11 @@ function TopicCard({
   }
 
   const hasDecisions = (topic.decisions?.length ?? 0) > 0;
-  const isOpen = topic.status === 'open';
+  const isOpen = TOPIC_LIVE_STATUSES.includes(topic.status);
   const stateColor =
-    topic.status === 'closed' ? 'var(--ink-done)'
-    : topic.status === 'cancelled' ? 'var(--ink-text-faint)'
-    : topic.openReason === 'needs_decision' ? 'var(--ink-blocked)'
+    shown === 'closed' ? 'var(--ink-done)'
+    : shown === 'cancelled' ? 'var(--ink-text-faint)'
+    : shown === 'awaiting_decision' ? 'var(--ink-blocked)'
     : 'var(--ink-accent)';
 
   // A topic that keeps re-entering the loop without progress needs an exit,
@@ -1199,7 +1215,7 @@ function TopicCard({
           </div>
           {topic.context && <p className="text-[12px] mt-1" style={{ color: 'var(--ink-text-muted)' }}>{topic.context}</p>}
           {topic.details && <DetailsBlock text={topic.details} />}
-          <TopicStateRow topic={topic} hasDecisions={hasDecisions} />
+          <TopicStateRow topic={topic} hasDecisions={hasDecisions} shown={shown} />
         </>
       )}
 
@@ -1251,7 +1267,7 @@ function TopicCard({
             style={{ color: 'var(--ink-text-secondary)' }}>
             Close
           </button>
-          {topic.openReason !== 'deferred' && (
+          {topic.status !== 'deferred' && (
             <button onClick={reopen} disabled={busy}
               title="Needs more time or info — comes back next huddle"
               className="text-[11.5px] px-2 py-0.5 rounded-md"
@@ -1259,7 +1275,7 @@ function TopicCard({
               Defer
             </button>
           )}
-          {topic.openReason !== 'needs_decision' && (
+          {topic.status !== 'awaiting_decision' && (
             <button onClick={setNeedsDecision} disabled={busy}
               title="Pending a named decision-maker"
               className="text-[11.5px] px-2 py-0.5 rounded-md"
@@ -1425,18 +1441,20 @@ function TopicCard({
 
 // Badges under a topic title: what state it's in, who owns it, who can call
 // it, and whether it has been round the loop before.
-function TopicStateRow({ topic, hasDecisions }: { topic: HuddleTopic; hasDecisions: boolean }) {
+function TopicStateRow({ topic, hasDecisions, shown }: {
+  topic: HuddleTopic; hasDecisions: boolean; shown: HuddleTopic['status'];
+}) {
   const chips: { label: string; bg: string; fg: string }[] = [];
 
-  if (topic.status === 'closed') {
+  if (shown === 'closed') {
     chips.push(hasDecisions
       ? { label: 'Decided', bg: 'var(--ink-accent-subtle)', fg: 'var(--ink-done)' }
       : { label: 'Closed', bg: 'var(--ink-surface-raised)', fg: 'var(--ink-text-secondary)' });
-  } else if (topic.status === 'cancelled') {
+  } else if (shown === 'cancelled') {
     chips.push({ label: 'Not relevant', bg: 'var(--ink-surface-raised)', fg: 'var(--ink-text-muted)' });
-  } else if (topic.openReason === 'needs_decision') {
+  } else if (shown === 'awaiting_decision') {
     chips.push({ label: 'Needs decision', bg: 'var(--ink-accent-subtle)', fg: 'var(--ink-blocked)' });
-  } else if (topic.openReason === 'deferred') {
+  } else if (shown === 'deferred') {
     chips.push({
       label: topic.deferCount > 0 ? `Deferred ×${topic.deferCount}` : 'Deferred',
       bg: 'var(--ink-surface-raised)', fg: 'var(--ink-text-secondary)',
@@ -1451,7 +1469,7 @@ function TopicStateRow({ topic, hasDecisions }: { topic: HuddleTopic; hasDecisio
   if (topic.ownerName) people.push(topic.ownerName);
   if (topic.approverName) people.push(`approves: ${topic.approverName}`);
   // The specific diagnosis for a stuck topic: someone owns it, nobody can call it.
-  if (topic.status === 'open' && topic.openReason === 'needs_decision' && !topic.approverName) {
+  if (shown === 'awaiting_decision' && !topic.approverName) {
     chips.push({ label: 'No decision-maker', bg: 'var(--ink-surface-raised)', fg: 'var(--ink-blocked)' });
   }
 

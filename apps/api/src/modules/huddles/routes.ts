@@ -75,7 +75,10 @@ const updateDecisionSchema = z.object({
   details: detailsField,
 });
 
-const topicOpenReason = z.enum(['deferred', 'needs_decision']);
+// A topic is "live" in any of these; the rest are terminal.
+const TOPIC_LIVE = ['proposed', 'scheduled', 'in_discussion', 'awaiting_decision', 'deferred'] as const;
+const topicStatus = z.enum([...TOPIC_LIVE, 'closed', 'cancelled']);
+const topicPurpose = z.enum(['decide', 'discuss', 'inform']);
 const topicHorizon = z.enum(['short_term', 'long_term']);
 
 const createTopicSchema = z.object({
@@ -84,6 +87,10 @@ const createTopicSchema = z.object({
   sourceSignalId: z.string().uuid().optional().nullable(),
   parentTopicId: z.string().uuid().optional().nullable(),
   ownerUserId: z.string().uuid().optional().nullable(),
+  approverUserId: z.string().uuid().optional().nullable(),
+  purpose: topicPurpose.optional(),
+  framingQuestion: z.string().max(500).nullable().optional(),
+  timeboxMinutes: z.number().int().min(1).max(480).nullable().optional(),
   details: detailsField,
 });
 
@@ -91,8 +98,10 @@ const updateTopicSchema = z.object({
   title: z.string().min(1).max(300).optional(),
   context: z.string().max(2000).nullable().optional(),
   sortOrder: z.number().int().optional(),
-  status: z.enum(['open', 'closed', 'cancelled']).optional(),
-  openReason: topicOpenReason.nullable().optional(),
+  status: topicStatus.optional(),
+  purpose: topicPurpose.optional(),
+  framingQuestion: z.string().max(500).nullable().optional(),
+  timeboxMinutes: z.number().int().min(1).max(480).nullable().optional(),
   horizon: topicHorizon.optional(),
   ownerUserId: z.string().uuid().nullable().optional(),
   approverUserId: z.string().uuid().nullable().optional(),
@@ -223,13 +232,26 @@ function formatSignal(r: any) {
 function formatTopic(r: any) {
   return {
     id: r.id,
-    huddleId: r.huddle_id,
+    // Where the topic was first raised. Which meetings it appears on now comes
+    // from huddle_agenda_items, so a board must read agenda fields, not this.
+    originHuddleId: r.origin_huddle_id,
+    // Kept so callers rendering one huddle's board keep working; resolves to
+    // the agenda's huddle when the row came through the agenda join.
+    huddleId: r.agenda_huddle_id ?? r.origin_huddle_id,
+    agendaItemId: r.agenda_item_id ?? null,
     title: r.title,
     context: r.context,
     details: r.details ?? null,
-    sortOrder: r.sort_order,
+    purpose: r.purpose ?? 'discuss',
+    framingQuestion: r.framing_question ?? null,
+    // Agenda timebox wins when present: the same topic can get a different
+    // allocation at different meetings.
+    timeboxMinutes: r.agenda_timebox ?? r.timebox_minutes ?? null,
+    outcome: r.outcome ?? null,
+    outcomeState: r.outcome_state ?? null,
+    firstDiscussedAt: r.first_discussed_at ?? null,
+    sortOrder: r.sort_order ?? 0,
     status: r.status,
-    openReason: r.open_reason ?? null,
     horizon: r.horizon ?? 'short_term',
     deferCount: r.defer_count ?? 0,
     ownerUserId: r.owner_user_id ?? null,
@@ -329,6 +351,60 @@ async function loadHuddleOrThrow(app: FastifyInstance, huddleId: string, userId:
   throw new ForbiddenError('You do not have access to this huddle');
 }
 
+// ─── Agenda reads ─────────────────────────────────────────────────────────
+// One place that knows how a topic is joined to a meeting, so the shape stays
+// consistent across the board, the export, the share view and the summary mail.
+const AGENDA_SELECT = `
+  SELECT t.*,
+         a.id         AS agenda_item_id,
+         a.huddle_id  AS agenda_huddle_id,
+         a.sort_order AS sort_order,
+         a.timebox_minutes AS agenda_timebox,
+         a.outcome, a.outcome_state,
+         uo.name AS owner_name, ua.name AS approver_name
+    FROM huddle_agenda_items a
+    JOIN huddle_topics t ON t.id = a.topic_id
+    LEFT JOIN users uo ON uo.id = t.owner_user_id
+    LEFT JOIN users ua ON ua.id = t.approver_user_id`;
+
+/** Every topic on one huddle's agenda, in agenda order. */
+async function agendaForHuddle(db: any, huddleId: string) {
+  const r = await db.query(
+    `${AGENDA_SELECT} WHERE a.huddle_id = $1 ORDER BY a.sort_order ASC, t.created_at ASC`,
+    [huddleId],
+  );
+  return r.rows;
+}
+
+/** A single topic as it appears on a given huddle's agenda. */
+async function agendaTopic(db: any, huddleId: string, topicId: string) {
+  const r = await db.query(
+    `${AGENDA_SELECT} WHERE a.huddle_id = $1 AND a.topic_id = $2`,
+    [huddleId, topicId],
+  );
+  if (r.rows.length === 0) throw new NotFoundError('Topic not found on this agenda');
+  return r.rows[0];
+}
+
+/** Puts an existing topic on a huddle's agenda, at the end. Idempotent. */
+async function addToAgenda(
+  db: any, huddleId: string, topicId: string, timeboxMinutes: number | null = null,
+) {
+  const ord = await db.query(
+    `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next
+       FROM huddle_agenda_items WHERE huddle_id = $1`,
+    [huddleId],
+  );
+  const r = await db.query(
+    `INSERT INTO huddle_agenda_items (huddle_id, topic_id, sort_order, timebox_minutes)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (huddle_id, topic_id) DO UPDATE SET updated_at = now()
+     RETURNING id`,
+    [huddleId, topicId, ord.rows[0].next, timeboxMinutes],
+  );
+  return r.rows[0].id;
+}
+
 // ─── Carry-forward ────────────────────────────────────────────────────────
 // Copies unresolved topics from the previous huddle in the same series into a
 // newly created one. Every huddle keeps its own row, so a topic's state in an
@@ -367,54 +443,55 @@ async function carryForwardTopics(client: any, newHuddleId: string, huddle: any)
 
   // Only short_term rides the loop. long_term was deliberately moved out of the
   // weekly rotation and should not keep reappearing.
-  const open = await client.query(
-    `SELECT * FROM huddle_topics
-      WHERE huddle_id = $1 AND status = 'open' AND horizon = 'short_term'
-      ORDER BY sort_order ASC, created_at ASC`,
+  const unresolved = await client.query(
+    `SELECT t.id, t.status, t.defer_count, a.sort_order
+       FROM huddle_agenda_items a
+       JOIN huddle_topics t ON t.id = a.topic_id
+      WHERE a.huddle_id = $1
+        AND t.status IN ('proposed','scheduled','in_discussion','awaiting_decision','deferred')
+        AND t.horizon = 'short_term'
+      ORDER BY a.sort_order ASC`,
     [prev.rows[0].id],
   );
-  if (open.rows.length === 0) return 0;
+  if (unresolved.rows.length === 0) return 0;
 
-  // Sit carried topics after anything already seeded (e.g. template topics).
+  // Sit carried items after anything already seeded (e.g. template topics).
   const maxRes = await client.query(
-    `SELECT COALESCE(MAX(sort_order), -1) AS m FROM huddle_topics WHERE huddle_id = $1`,
+    `SELECT COALESCE(MAX(sort_order), -1) AS m FROM huddle_agenda_items WHERE huddle_id = $1`,
     [newHuddleId],
   );
   let order = Number(maxRes.rows[0].m) + 1;
 
-  const idMap = new Map<string, string>();
-  for (const t of open.rows) {
+  let carried = 0;
+  for (const t of unresolved.rows) {
+    // The topic itself is not duplicated any more — it simply appears on
+    // another agenda, which is what makes its age and history queryable.
     const ins = await client.query(
-      `INSERT INTO huddle_topics
-         (huddle_id, title, context, details, sort_order, status, open_reason, horizon,
-          owner_user_id, approver_user_id, defer_count, carried_from_topic_id)
-       VALUES ($1, $2, $3, $4, $5, 'open', $6, 'short_term', $7, $8, $9, $10)
+      `INSERT INTO huddle_agenda_items (huddle_id, topic_id, sort_order)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (huddle_id, topic_id) DO NOTHING
        RETURNING id`,
-      [
-        newHuddleId, t.title, t.context, t.details, order++,
-        // An untriaged topic that survives a meeting has, in effect, been deferred.
-        t.open_reason ?? 'deferred',
-        t.owner_user_id, t.approver_user_id,
-        (t.defer_count ?? 0) + 1, t.id,
-      ],
+      [newHuddleId, t.id, order++],
     );
-    idMap.set(t.id, ins.rows[0].id);
-  }
+    if (ins.rows.length === 0) continue;  // already on this agenda
 
-  // Second pass: re-point subtopics at the new parent rows, so nesting survives
-  // the hop instead of the children surfacing as roots.
-  for (const t of open.rows) {
-    if (!t.parent_topic_id) continue;
-    const newParent = idMap.get(t.parent_topic_id);
-    const newChild = idMap.get(t.id);
-    if (!newParent || !newChild) continue;
+    // Surviving a meeting unresolved counts as a deferral, and an untriaged
+    // topic becomes explicitly deferred.
     await client.query(
-      `UPDATE huddle_topics SET parent_topic_id = $1 WHERE id = $2`,
-      [newParent, newChild],
+      `UPDATE huddle_topics
+          SET defer_count = defer_count + 1,
+              status = CASE WHEN status IN ('proposed','scheduled','in_discussion')
+                            THEN 'deferred' ELSE status END,
+              updated_at = now()
+        WHERE id = $1`,
+      [t.id],
     );
+    carried++;
   }
 
-  return idMap.size;
+  // Subtopics need no re-pointing now: parent_topic_id lives on the topic, and
+  // the topic is no longer copied.
+  return carried;
 }
 
 // Creates the workspace task that backs an action item, and links the
@@ -560,8 +637,10 @@ function buildMinuteMarkdown(input: {
       const label =
         t.status === 'cancelled' ? 'cancelled'
         : t.status === 'closed' ? (decs.length > 0 ? 'decided' : 'closed')
-        : t.open_reason === 'needs_decision' ? 'needs a decision'
-        : t.open_reason === 'deferred' ? `deferred${t.defer_count > 1 ? ` ×${t.defer_count}` : ''}`
+        : t.status === 'awaiting_decision' ? 'needs a decision'
+        : t.status === 'deferred' ? `deferred${t.defer_count > 1 ? ` ×${t.defer_count}` : ''}`
+        : t.status === 'in_discussion' ? 'in discussion'
+        : t.status === 'proposed' ? 'proposed'
         : null;
       const statusTag = label ? ` _(${label})_` : '';
       const owner = t.owner_name ? ` — _${t.owner_name}_` : '';
@@ -663,8 +742,10 @@ async function sendHuddleSummaryToParticipants(
   // Build payload (mirrors the public-share endpoint shape).
   const [topics, decisions, intentions, followups, notes] = await Promise.all([
     app.pg.query(
-      `SELECT id, title FROM huddle_topics WHERE huddle_id = $1
-       ORDER BY sort_order ASC, created_at ASC`,
+      `SELECT t.id, t.title FROM huddle_agenda_items a
+         JOIN huddle_topics t ON t.id = a.topic_id
+        WHERE a.huddle_id = $1
+        ORDER BY a.sort_order ASC, t.created_at ASC`,
       [huddleId],
     ),
     app.pg.query(
@@ -672,7 +753,7 @@ async function sendHuddleSummaryToParticipants(
        FROM huddle_decisions d
        JOIN huddle_topics t ON t.id = d.huddle_topic_id
        LEFT JOIN users u ON u.id = d.owner_user_id
-       WHERE t.huddle_id = $1
+       WHERE d.huddle_id = $1
        ORDER BY d.created_at ASC`,
       [huddleId],
     ),
@@ -942,21 +1023,13 @@ export default async function huddleRoutes(app: FastifyInstance) {
          ORDER BY s.sort_order ASC, s.created_at ASC`,
         [id],
       ),
-      app.pg.query(
-        `SELECT t.*, uo.name AS owner_name, ua.name AS approver_name
-         FROM huddle_topics t
-         LEFT JOIN users uo ON uo.id = t.owner_user_id
-         LEFT JOIN users ua ON ua.id = t.approver_user_id
-         WHERE t.huddle_id = $1
-         ORDER BY t.sort_order ASC, t.created_at ASC`,
-        [id],
-      ),
+      agendaForHuddle(app.pg, id).then((rows) => ({ rows })),
       app.pg.query(
         `SELECT d.*, u.name AS owner_name
          FROM huddle_decisions d
          JOIN huddle_topics t ON t.id = d.huddle_topic_id
          LEFT JOIN users u ON u.id = d.owner_user_id
-         WHERE t.huddle_id = $1
+         WHERE d.huddle_id = $1
          ORDER BY d.created_at ASC`,
         [id],
       ),
@@ -1070,6 +1143,17 @@ export default async function huddleRoutes(app: FastifyInstance) {
     );
     const closed = r.rows[0];
 
+    // Record what state each agenda item was left in. A topic is no longer
+    // copied per meeting, so this is what keeps a past huddle an accurate
+    // account of what was true when it ended.
+    await app.pg.query(
+      `UPDATE huddle_agenda_items a
+          SET outcome_state = t.status, updated_at = now()
+         FROM huddle_topics t
+        WHERE t.id = a.topic_id AND a.huddle_id = $1`,
+      [id],
+    );
+
     // Fire-and-forget: if auto-email is enabled and we haven't already sent
     // for this huddle, dispatch the summary email to participants. Errors are
     // logged but do not fail the close call.
@@ -1110,20 +1194,13 @@ export default async function huddleRoutes(app: FastifyInstance) {
          ORDER BY s.sort_order ASC, s.created_at ASC`,
         [id],
       ),
-      app.pg.query(
-        `SELECT t.*, uo.name AS owner_name
-           FROM huddle_topics t
-           LEFT JOIN users uo ON uo.id = t.owner_user_id
-          WHERE t.huddle_id = $1
-          ORDER BY t.sort_order ASC, t.created_at ASC`,
-        [id],
-      ),
+      agendaForHuddle(app.pg, id).then((rows) => ({ rows })),
       app.pg.query(
         `SELECT d.*, u.name AS owner_name
          FROM huddle_decisions d
          JOIN huddle_topics t ON t.id = d.huddle_topic_id
          LEFT JOIN users u ON u.id = d.owner_user_id
-         WHERE t.huddle_id = $1
+         WHERE d.huddle_id = $1
          ORDER BY d.created_at ASC`,
         [id],
       ),
@@ -1236,9 +1313,11 @@ export default async function huddleRoutes(app: FastifyInstance) {
         [id, huddle.host_user_id],
       ),
       app.pg.query(
-        `SELECT title FROM huddle_topics
-          WHERE huddle_id = $1 AND status = 'open'
-          ORDER BY sort_order ASC, created_at ASC LIMIT 12`,
+        `SELECT t.title FROM huddle_agenda_items a
+           JOIN huddle_topics t ON t.id = a.topic_id
+          WHERE a.huddle_id = $1
+            AND t.status IN ('proposed','scheduled','in_discussion','awaiting_decision','deferred')
+          ORDER BY a.sort_order ASC, t.created_at ASC LIMIT 12`,
         [id],
       ),
     ]);
@@ -1406,15 +1485,13 @@ export default async function huddleRoutes(app: FastifyInstance) {
     const client = await app.pg.connect();
     try {
       await client.query('BEGIN');
-      const orderRes = await client.query(
-        `SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM huddle_topics WHERE huddle_id = $1`,
-        [id],
-      );
       const topicRes = await client.query(
-        `INSERT INTO huddle_topics (huddle_id, title, context, sort_order, source_signal_id)
-         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-        [id, s.text, s.why_it_matters, orderRes.rows[0].next, sid],
+        `INSERT INTO huddle_topics
+           (origin_huddle_id, title, context, source_signal_id, status, first_discussed_at)
+         VALUES ($1, $2, $3, $4, 'scheduled', now()) RETURNING *`,
+        [id, s.text, s.why_it_matters, sid],
       );
+      await addToAgenda(client, id, topicRes.rows[0].id);
       await client.query(`UPDATE huddle_signals SET promoted_to_topic = true WHERE id = $1`, [sid]);
       await client.query('COMMIT');
       return { topic: formatTopic(topicRes.rows[0]) };
@@ -1465,20 +1542,28 @@ export default async function huddleRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
     const body = createTopicSchema.parse(request.body);
     await loadHuddleOrThrow(app, id, userId);
-    const orderRes = await app.pg.query(
-      `SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM huddle_topics WHERE huddle_id = $1`, [id],
-    );
+
+    // A topic with purpose 'decide' has to have someone who can call it.
+    if (body.purpose === 'decide' && !body.approverUserId) {
+      throw new BadRequestError('A topic for deciding needs a decider before it goes on an agenda');
+    }
+
     const r = await app.pg.query(
       `INSERT INTO huddle_topics
-         (huddle_id, title, context, details, sort_order, source_signal_id, parent_topic_id, owner_user_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+         (origin_huddle_id, title, context, details, source_signal_id, parent_topic_id,
+          owner_user_id, approver_user_id, purpose, framing_question, timebox_minutes,
+          status, first_discussed_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'scheduled', now()) RETURNING *`,
       [
         id, body.title, body.context ?? null, body.details ?? null,
-        orderRes.rows[0].next, body.sourceSignalId ?? null,
-        body.parentTopicId ?? null, body.ownerUserId ?? null,
+        body.sourceSignalId ?? null, body.parentTopicId ?? null,
+        body.ownerUserId ?? null, body.approverUserId ?? null,
+        body.purpose ?? 'discuss', body.framingQuestion ?? null,
+        body.timeboxMinutes ?? null,
       ],
     );
-    return reply.status(201).send({ topic: formatTopic(r.rows[0]) });
+    await addToAgenda(app.pg, id, r.rows[0].id, body.timeboxMinutes ?? null);
+    return reply.status(201).send({ topic: formatTopic(await agendaTopic(app.pg, id, r.rows[0].id)) });
   });
 
   app.put('/huddles/:id/topics/reorder', { preHandler: [app.authenticate] }, async (request) => {
@@ -1491,7 +1576,8 @@ export default async function huddleRoutes(app: FastifyInstance) {
       await client.query('BEGIN');
       for (let idx = 0; idx < body.orderedIds.length; idx++) {
         await client.query(
-          `UPDATE huddle_topics SET sort_order = $1, updated_at = now() WHERE id = $2 AND huddle_id = $3`,
+          `UPDATE huddle_agenda_items SET sort_order = $1, updated_at = now()
+            WHERE topic_id = $2 AND huddle_id = $3`,
           [idx, body.orderedIds[idx], id],
         );
       }
@@ -1517,7 +1603,9 @@ export default async function huddleRoutes(app: FastifyInstance) {
     if (body.context !== undefined) { sets.push(`context = $${i++}`); params.push(body.context); }
     if (body.details !== undefined) { sets.push(`details = $${i++}`); params.push(body.details); }
     if (body.sortOrder !== undefined) { sets.push(`sort_order = $${i++}`); params.push(body.sortOrder); }
-    if (body.openReason !== undefined) { sets.push(`open_reason = $${i++}`); params.push(body.openReason); }
+    if (body.purpose !== undefined) { sets.push(`purpose = $${i++}`); params.push(body.purpose); }
+    if (body.framingQuestion !== undefined) { sets.push(`framing_question = $${i++}`); params.push(body.framingQuestion); }
+    if (body.timeboxMinutes !== undefined) { sets.push(`timebox_minutes = $${i++}`); params.push(body.timeboxMinutes); }
     if (body.horizon !== undefined) { sets.push(`horizon = $${i++}`); params.push(body.horizon); }
     if (body.ownerUserId !== undefined) { sets.push(`owner_user_id = $${i++}`); params.push(body.ownerUserId); }
     if (body.approverUserId !== undefined) { sets.push(`approver_user_id = $${i++}`); params.push(body.approverUserId); }
@@ -1529,10 +1617,10 @@ export default async function huddleRoutes(app: FastifyInstance) {
       sets.push(`status = $${i++}`); params.push(body.status);
       // Keep the terminal-state bookkeeping consistent however the status is
       // set, so a plain PUT can't leave a closed topic without a closed_at.
-      if (body.status === 'open') {
+      if ((TOPIC_LIVE as readonly string[]).includes(body.status)) {
         sets.push(`closed_at = NULL`, `closed_by_user_id = NULL`);
       } else {
-        sets.push(`open_reason = NULL`, `closed_at = COALESCE(closed_at, now())`);
+        sets.push(`closed_at = COALESCE(closed_at, now())`);
         sets.push(`closed_by_user_id = $${i++}`); params.push(userId);
       }
     }
@@ -1552,10 +1640,18 @@ export default async function huddleRoutes(app: FastifyInstance) {
     const huddle = await loadHuddleOrThrow(app, id, userId);
     requireHost(huddle, userId);
     const r = await app.pg.query(
-      'DELETE FROM huddle_topics WHERE id = $1 AND huddle_id = $2 RETURNING id',
+      'DELETE FROM huddle_agenda_items WHERE topic_id = $1 AND huddle_id = $2 RETURNING id',
       [tid, id],
     );
-    if (r.rows.length === 0) throw new NotFoundError('Topic not found');
+    if (r.rows.length === 0) throw new NotFoundError('Topic not found on this agenda');
+    // Only drop the topic itself once it is on no agenda at all, so removing it
+    // from one meeting never erases its history from the others.
+    await app.pg.query(
+      `DELETE FROM huddle_topics t
+        WHERE t.id = $1
+          AND NOT EXISTS (SELECT 1 FROM huddle_agenda_items a WHERE a.topic_id = t.id)`,
+      [tid],
+    );
     return reply.status(204).send();
   });
 
@@ -1567,7 +1663,7 @@ export default async function huddleRoutes(app: FastifyInstance) {
     const r = await app.pg.query(
       `DELETE FROM huddle_decisions d
        USING huddle_topics t
-       WHERE d.id = $1 AND d.huddle_topic_id = t.id AND t.huddle_id = $2
+       WHERE d.id = $1 AND d.huddle_topic_id = t.id AND d.huddle_id = $2
        RETURNING d.id`,
       [did, id],
     );
@@ -1609,22 +1705,29 @@ export default async function huddleRoutes(app: FastifyInstance) {
     const body = decideTopicSchema.parse(request.body);
     await loadHuddleOrThrow(app, id, userId);
 
-    const t = await app.pg.query('SELECT * FROM huddle_topics WHERE id = $1 AND huddle_id = $2', [tid, id]);
-    if (t.rows.length === 0) throw new NotFoundError('Topic not found');
+    const t = await app.pg.query(
+      `SELECT t.* FROM huddle_topics t
+         JOIN huddle_agenda_items a ON a.topic_id = t.id
+        WHERE t.id = $1 AND a.huddle_id = $2`,
+      [tid, id],
+    );
+    if (t.rows.length === 0) throw new NotFoundError('Topic not found on this agenda');
 
     const client = await app.pg.connect();
     try {
       await client.query('BEGIN');
       const dec = await client.query(
-        `INSERT INTO huddle_decisions (huddle_topic_id, owner_user_id, decision_text, details)
-         VALUES ($1, $2, $3, $4) RETURNING *`,
-        [tid, body.ownerUserId ?? null, body.decisionText, body.details ?? null],
+        // huddle_id records which meeting actually made the call — a topic can
+        // now span several, so it can no longer be inferred from the topic.
+        `INSERT INTO huddle_decisions (huddle_topic_id, huddle_id, owner_user_id, decision_text, details)
+         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+        [tid, id, body.ownerUserId ?? null, body.decisionText, body.details ?? null],
       );
       // Recording a decision closes the topic. The non-empty decision log is
       // what makes it render as "Decided" rather than plain "Closed".
       await client.query(
         `UPDATE huddle_topics
-            SET status = 'closed', open_reason = NULL,
+            SET status = 'closed',
                 closed_at = COALESCE(closed_at, now()), closed_by_user_id = $2,
                 updated_at = now()
           WHERE id = $1`,
@@ -1645,11 +1748,7 @@ export default async function huddleRoutes(app: FastifyInstance) {
   // the shape the detail endpoint returns.
   async function topicWithNames(topicId: string, huddleId: string) {
     const r = await app.pg.query(
-      `SELECT t.*, uo.name AS owner_name, ua.name AS approver_name
-         FROM huddle_topics t
-         LEFT JOIN users uo ON uo.id = t.owner_user_id
-         LEFT JOIN users ua ON ua.id = t.approver_user_id
-        WHERE t.id = $1 AND t.huddle_id = $2`,
+      `${AGENDA_SELECT} WHERE a.topic_id = $1 AND a.huddle_id = $2`,
       [topicId, huddleId],
     );
     if (r.rows.length === 0) throw new NotFoundError('Topic not found');
@@ -1666,11 +1765,12 @@ export default async function huddleRoutes(app: FastifyInstance) {
     await loadHuddleOrThrow(app, id, userId);
     const r = await app.pg.query(
       `UPDATE huddle_topics
-          SET status = 'open', open_reason = 'deferred',
+          SET status = 'deferred',
               horizon = COALESCE($3, horizon),
               closed_at = NULL, closed_by_user_id = NULL,
               updated_at = now()
-        WHERE id = $1 AND huddle_id = $2 RETURNING id`,
+        WHERE id = $1 AND EXISTS (SELECT 1 FROM huddle_agenda_items a
+                 WHERE a.topic_id = huddle_topics.id AND a.huddle_id = $2) RETURNING id`,
       [tid, id, body?.horizon ?? null],
     );
     if (r.rows.length === 0) throw new NotFoundError('Topic not found');
@@ -1687,12 +1787,13 @@ export default async function huddleRoutes(app: FastifyInstance) {
     await loadHuddleOrThrow(app, id, userId);
     const r = await app.pg.query(
       `UPDATE huddle_topics
-          SET status = 'open', open_reason = 'needs_decision',
+          SET status = 'awaiting_decision',
               approver_user_id = COALESCE($3, approver_user_id),
               owner_user_id    = COALESCE($4, owner_user_id),
               closed_at = NULL, closed_by_user_id = NULL,
               updated_at = now()
-        WHERE id = $1 AND huddle_id = $2 RETURNING id`,
+        WHERE id = $1 AND EXISTS (SELECT 1 FROM huddle_agenda_items a
+                 WHERE a.topic_id = huddle_topics.id AND a.huddle_id = $2) RETURNING id`,
       [tid, id, body?.approverUserId ?? null, body?.ownerUserId ?? null],
     );
     if (r.rows.length === 0) throw new NotFoundError('Topic not found');
@@ -1708,10 +1809,11 @@ export default async function huddleRoutes(app: FastifyInstance) {
     await loadHuddleOrThrow(app, id, userId);
     const r = await app.pg.query(
       `UPDATE huddle_topics
-          SET status = $3, open_reason = NULL,
+          SET status = $3,
               closed_at = COALESCE(closed_at, now()), closed_by_user_id = $4,
               updated_at = now()
-        WHERE id = $1 AND huddle_id = $2 RETURNING id`,
+        WHERE id = $1 AND EXISTS (SELECT 1 FROM huddle_agenda_items a
+                 WHERE a.topic_id = huddle_topics.id AND a.huddle_id = $2) RETURNING id`,
       [tid, id, body?.outcome ?? 'closed', userId],
     );
     if (r.rows.length === 0) throw new NotFoundError('Topic not found');
@@ -1725,8 +1827,9 @@ export default async function huddleRoutes(app: FastifyInstance) {
     await loadHuddleOrThrow(app, id, userId);
     const r = await app.pg.query(
       `UPDATE huddle_topics
-          SET status = 'open', open_reason = 'deferred', updated_at = now()
-        WHERE id = $1 AND huddle_id = $2 RETURNING id`,
+          SET status = 'deferred', updated_at = now()
+        WHERE id = $1 AND EXISTS (SELECT 1 FROM huddle_agenda_items a
+                 WHERE a.topic_id = huddle_topics.id AND a.huddle_id = $2) RETURNING id`,
       [tid, id],
     );
     if (r.rows.length === 0) throw new NotFoundError('Topic not found');
@@ -1741,7 +1844,7 @@ export default async function huddleRoutes(app: FastifyInstance) {
     const cur = await app.pg.query(
       `SELECT d.* FROM huddle_decisions d
          JOIN huddle_topics t ON t.id = d.huddle_topic_id
-         WHERE d.id = $1 AND t.huddle_id = $2`,
+         WHERE d.id = $1 AND d.huddle_id = $2`,
       [did, id],
     );
     if (cur.rows.length === 0) throw new NotFoundError('Decision not found');
@@ -2001,49 +2104,45 @@ export default async function huddleRoutes(app: FastifyInstance) {
       };
     }
 
-    // Age of a topic = time since it was FIRST raised, which means walking the
-    // carry-forward chain back to its origin rather than using created_at on
-    // the current row (that only says when it was last copied).
+    // One row per topic now, however many meetings it appeared on — so the
+    // recursive chain walk and the "superseded copy" filter this used to need
+    // are both gone. Age comes straight off first_discussed_at.
     const [topicsRes, decisionsRes, actionsRes, closedRes] = await Promise.all([
       app.pg.query(
-        `WITH RECURSIVE chain AS (
-           SELECT t.id AS topic_id, t.carried_from_topic_id AS prev, t.created_at
-             FROM huddle_topics t WHERE t.huddle_id = ANY($1::uuid[])
-           UNION ALL
-           SELECT c.topic_id, p.carried_from_topic_id, p.created_at
-             FROM chain c JOIN huddle_topics p ON p.id = c.prev
-         ), origin AS (
-           SELECT topic_id, MIN(created_at) AS first_raised FROM chain GROUP BY topic_id
-         )
-         SELECT t.id, t.title, t.status, t.open_reason, t.horizon, t.defer_count,
-                t.huddle_id, h.title AS huddle_title, o.first_raised,
+        `SELECT DISTINCT ON (t.id)
+                t.id, t.title, t.status, t.horizon, t.defer_count, t.purpose,
+                COALESCE(t.first_discussed_at, t.created_at) AS first_raised,
+                EXTRACT(DAY FROM (now() - COALESCE(t.first_discussed_at, t.created_at)))::int AS age_days,
+                last_seen.huddle_id AS huddle_id,
+                last_seen.huddle_title,
+                (SELECT count(*) FROM huddle_agenda_items ai WHERE ai.topic_id = t.id)::int AS meeting_count,
                 uo.name AS owner_name, ua.name AS approver_name,
-                EXTRACT(DAY FROM (now() - o.first_raised))::int AS age_days,
                 EXISTS (SELECT 1 FROM huddle_topics c
-                         WHERE c.parent_topic_id = t.id AND c.status = 'open') AS has_open_child,
-                -- A topic that something later carried forward from is a
-                -- historical copy. Its own huddle still shows it as open (that
-                -- was true at the time), but the series view wants only the
-                -- live head of each chain, or the same topic appears once per
-                -- meeting it survived.
-                EXISTS (SELECT 1 FROM huddle_topics n
-                         WHERE n.carried_from_topic_id = t.id) AS superseded
+                         WHERE c.parent_topic_id = t.id
+                           AND c.status = ANY($2::text[])) AS has_open_child
            FROM huddle_topics t
-           JOIN huddles h ON h.id = t.huddle_id
-           JOIN origin o ON o.topic_id = t.id
+           JOIN LATERAL (
+             SELECT a.huddle_id, h.title AS huddle_title
+               FROM huddle_agenda_items a
+               JOIN huddles h ON h.id = a.huddle_id
+              WHERE a.topic_id = t.id AND a.huddle_id = ANY($1::uuid[])
+              ORDER BY COALESCE(h.ended_at, h.scheduled_at, h.created_at) DESC
+              LIMIT 1
+           ) last_seen ON true
            LEFT JOIN users uo ON uo.id = t.owner_user_id
-           LEFT JOIN users ua ON ua.id = t.approver_user_id
-          WHERE t.huddle_id = ANY($1::uuid[])`,
-        [huddleIds],
+           LEFT JOIN users ua ON ua.id = t.approver_user_id`,
+        [huddleIds, [...TOPIC_LIVE]],
       ),
       app.pg.query(
+        // The decision's own huddle_id is now authoritative for which meeting
+        // made the call; the topic may have appeared at several.
         `SELECT d.decision_text, d.created_at, t.title AS topic_title,
                 h.title AS huddle_title, u.name AS owner_name
            FROM huddle_decisions d
            JOIN huddle_topics t ON t.id = d.huddle_topic_id
-           JOIN huddles h ON h.id = t.huddle_id
+           JOIN huddles h ON h.id = d.huddle_id
            LEFT JOIN users u ON u.id = d.owner_user_id
-          WHERE t.huddle_id = ANY($1::uuid[])
+          WHERE d.huddle_id = ANY($1::uuid[])
           ORDER BY d.created_at ASC`,
         [huddleIds],
       ),
@@ -2063,22 +2162,44 @@ export default async function huddleRoutes(app: FastifyInstance) {
         [huddleIds],
       ),
       app.pg.query(
+        // Time to close now runs from when the topic was first discussed, not
+        // when the last copy of it was created.
         `SELECT percentile_cont(0.5) WITHIN GROUP (
-                  ORDER BY EXTRACT(EPOCH FROM (closed_at - created_at)) / 86400.0
+                  ORDER BY EXTRACT(EPOCH FROM
+                    (t.closed_at - COALESCE(t.first_discussed_at, t.created_at))) / 86400.0
                 ) AS median_days
-           FROM huddle_topics
-          WHERE huddle_id = ANY($1::uuid[]) AND closed_at IS NOT NULL`,
+           FROM huddle_topics t
+          WHERE t.closed_at IS NOT NULL
+            AND EXISTS (SELECT 1 FROM huddle_agenda_items a
+                         WHERE a.topic_id = t.id AND a.huddle_id = ANY($1::uuid[]))`,
         [huddleIds],
       ),
     ]);
 
     const topics = topicsRes.rows;
-    // Live = still open and not already carried into a later huddle.
-    const open = topics.filter((t: any) => t.status === 'open' && !t.superseded);
+    const LIVE: readonly string[] = TOPIC_LIVE;
+    const open = topics.filter((t: any) => LIVE.includes(t.status));
+
+    // Per-meeting throughput reads off the agenda: a topic can be on several
+    // agendas, so counting by the topic's own row would attribute it once only.
+    const perHuddle = await app.pg.query(
+      `SELECT a.huddle_id,
+              count(*)::int AS total,
+              count(*) FILTER (WHERE t.status = 'closed')::int    AS closed,
+              count(*) FILTER (WHERE t.status = 'cancelled')::int AS cancelled
+         FROM huddle_agenda_items a
+         JOIN huddle_topics t ON t.id = a.topic_id
+        WHERE a.huddle_id = ANY($1::uuid[])
+        GROUP BY a.huddle_id`,
+      [huddleIds],
+    );
+    const agendaCounts = new Map<string, { total: number; closed: number; cancelled: number }>(
+      perHuddle.rows.map((r: any) => [r.huddle_id, r]),
+    );
 
     const shape = (t: any) => ({
       id: t.id, title: t.title, status: t.status,
-      openReason: t.open_reason, horizon: t.horizon,
+      purpose: t.purpose, horizon: t.horizon, meetingCount: t.meeting_count ?? 1,
       deferCount: t.defer_count ?? 0, ageDays: t.age_days ?? 0,
       ownerName: t.owner_name ?? null, approverName: t.approver_name ?? null,
       huddleId: t.huddle_id, huddleTitle: t.huddle_title,
@@ -2108,9 +2229,9 @@ export default async function huddleRoutes(app: FastifyInstance) {
         id: h.id, title: h.title, status: h.status,
         endedAt: h.ended_at, scheduledAt: h.scheduled_at, createdAt: h.created_at,
         // Per-huddle throughput, so an opened-faster-than-closed trend is visible.
-        opened: topics.filter((t: any) => t.huddle_id === h.id).length,
-        closed: topics.filter((t: any) => t.huddle_id === h.id && t.status === 'closed').length,
-        cancelled: topics.filter((t: any) => t.huddle_id === h.id && t.status === 'cancelled').length,
+        opened: agendaCounts.get(h.id)?.total ?? 0,
+        closed: agendaCounts.get(h.id)?.closed ?? 0,
+        cancelled: agendaCounts.get(h.id)?.cancelled ?? 0,
       })),
       // Aging is the leading indicator — what's at risk now, not what already finished.
       openTopics: open
@@ -2139,7 +2260,7 @@ export default async function huddleRoutes(app: FastifyInstance) {
         cancelled: topics.filter((t: any) => t.status === 'cancelled').length,
         stillOpen: open.length,
         needsDecisionNoApprover: open.filter(
-          (t: any) => t.open_reason === 'needs_decision' && !t.approver_name).length,
+          (t: any) => t.status === 'awaiting_decision' && !t.approver_name).length,
         medianDaysToClose: closedRes.rows[0]?.median_days != null
           ? Math.round(Number(closedRes.rows[0].median_days) * 10) / 10
           : null,
@@ -2344,7 +2465,9 @@ export default async function huddleRoutes(app: FastifyInstance) {
     let topics: { title: string; context: string | null }[] = [];
     if (body.includeTopics) {
       const t = await app.pg.query(
-        `SELECT title, context FROM huddle_topics WHERE huddle_id = $1 ORDER BY sort_order ASC, created_at ASC`,
+        `SELECT t.title, t.context FROM huddle_agenda_items a
+           JOIN huddle_topics t ON t.id = a.topic_id
+          WHERE a.huddle_id = $1 ORDER BY a.sort_order ASC, t.created_at ASC`,
         [id],
       );
       topics = t.rows.map((row: any) => ({ title: row.title, context: row.context ?? null }));
@@ -2467,8 +2590,9 @@ export default async function huddleRoutes(app: FastifyInstance) {
     await carryForwardTopics(app.pg, huddle.id, huddle);
 
     const carried = await app.pg.query(
-      `SELECT lower(btrim(title)) AS key, COALESCE(MAX(sort_order), -1) AS max_order
-         FROM huddle_topics WHERE huddle_id = $1 GROUP BY lower(btrim(title))`,
+      `SELECT lower(btrim(t.title)) AS key, COALESCE(MAX(a.sort_order), -1) AS max_order
+         FROM huddle_agenda_items a JOIN huddle_topics t ON t.id = a.topic_id
+        WHERE a.huddle_id = $1 GROUP BY lower(btrim(t.title))`,
       [huddle.id],
     );
     const alreadyPresent = new Set<string>(carried.rows.map((r: any) => r.key));
@@ -2599,9 +2723,10 @@ export default async function huddleRoutes(app: FastifyInstance) {
         [huddleId],
       ),
       app.pg.query(
-        `SELECT id, title, context, status, open_reason, sort_order
-         FROM huddle_topics WHERE huddle_id = $1
-         ORDER BY sort_order ASC, created_at ASC`,
+        `SELECT t.id, t.title, t.context, t.status, a.sort_order
+           FROM huddle_agenda_items a JOIN huddle_topics t ON t.id = a.topic_id
+          WHERE a.huddle_id = $1
+          ORDER BY a.sort_order ASC, t.created_at ASC`,
         [huddleId],
       ),
       app.pg.query(
@@ -2609,7 +2734,7 @@ export default async function huddleRoutes(app: FastifyInstance) {
          FROM huddle_decisions d
          JOIN huddle_topics t ON t.id = d.huddle_topic_id
          LEFT JOIN users u ON u.id = d.owner_user_id
-         WHERE t.huddle_id = $1
+         WHERE d.huddle_id = $1
          ORDER BY d.created_at ASC`,
         [huddleId],
       ),
@@ -2679,7 +2804,7 @@ export default async function huddleRoutes(app: FastifyInstance) {
           title: t.title,
           context: t.context,
           status: t.status,
-          openReason: t.open_reason ?? null,
+          // status now carries what open_reason used to.
           decisions: decByTopic.get(t.id) ?? [],
         })),
         intentions: intentions.rows.map((i) => ({

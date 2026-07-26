@@ -2,8 +2,10 @@ export type HuddleType = 'team' | 'personal';
 export type HuddleStatus = 'draft' | 'active' | 'closed';
 export type HuddleParticipantRole = 'host' | 'participant';
 export type HuddleAttendanceStatus = 'invited' | 'present' | 'late' | 'virtual' | 'excused';
-export type HuddleTopicStatus = 'open' | 'closed' | 'cancelled';
-export type HuddleTopicOpenReason = 'deferred' | 'needs_decision' | null;
+export type HuddleTopicStatus =
+  | 'proposed' | 'scheduled' | 'in_discussion'
+  | 'awaiting_decision' | 'deferred' | 'closed' | 'cancelled';
+export type HuddleTopicPurpose = 'decide' | 'discuss' | 'inform';
 export type HuddleTopicHorizon = 'short_term' | 'long_term';
 export type HuddleIntentionStatus = 'open' | 'done' | 'cancelled';
 export type HuddleFollowupStatus = 'open' | 'done' | 'carried_forward';
@@ -58,7 +60,9 @@ export interface HuddleTopic {
   context: string | null;
   sortOrder: number;
   status: HuddleTopicStatus;
-  openReason: HuddleTopicOpenReason;
+  purpose: HuddleTopicPurpose;
+  framingQuestion?: string | null;
+  timeboxMinutes?: number | null;
   horizon: HuddleTopicHorizon;
   deferCount: number;
   ownerUserId: string | null;

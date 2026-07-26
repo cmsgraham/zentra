@@ -8,7 +8,8 @@ interface ReportTopic {
   id: string;
   title: string;
   status: string;
-  openReason: string | null;
+  purpose: string;
+  meetingCount?: number;
   horizon: string;
   deferCount: number;
   ageDays: number;
@@ -151,7 +152,7 @@ export function HuddleSeriesReportView({ templateId }: { templateId: string }) {
                         </Link>
                         <div className="flex items-center gap-2 mt-1 flex-wrap text-[11.5px]"
                           style={{ color: 'var(--ink-text-muted)' }}>
-                          {t.openReason === 'needs_decision' && (
+                          {t.status === 'awaiting_decision' && (
                             <Chip text={t.approverName ? `Needs decision · ${t.approverName}` : 'Needs decision · no decision-maker'} tone="bad" />
                           )}
                           {t.deferCount > 0 && <Chip text={`Deferred ×${t.deferCount}`} />}

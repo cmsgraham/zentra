@@ -5,9 +5,14 @@ export type HuddleType = 'team' | 'personal';
 export type HuddleStatus = 'draft' | 'active' | 'closed';
 export type HuddleParticipantRole = 'host' | 'participant';
 export type HuddleAttendanceStatus = 'invited' | 'present' | 'late' | 'virtual' | 'excused';
-export type HuddleTopicStatus = 'open' | 'closed' | 'cancelled';
-// Why a topic is still open. NULL = raised but not yet triaged.
-export type HuddleTopicOpenReason = 'deferred' | 'needs_decision' | null;
+// A topic's lifecycle now spans meetings, so the state is named rather than
+// carried as an "open + reason" pair.
+export type HuddleTopicStatus =
+  | 'proposed' | 'scheduled' | 'in_discussion'
+  | 'awaiting_decision' | 'deferred' | 'closed' | 'cancelled';
+export const TOPIC_LIVE_STATUSES: HuddleTopicStatus[] =
+  ['proposed', 'scheduled', 'in_discussion', 'awaiting_decision', 'deferred'];
+export type HuddleTopicPurpose = 'decide' | 'discuss' | 'inform';
 // short_term rides the weekly loop; long_term is out of the rotation.
 export type HuddleTopicHorizon = 'short_term' | 'long_term';
 export type HuddleIntentionStatus = 'open' | 'done' | 'cancelled';
@@ -80,7 +85,14 @@ export interface HuddleTopic {
   details: string | null;
   sortOrder: number;
   status: HuddleTopicStatus;
-  openReason: HuddleTopicOpenReason;
+  purpose: HuddleTopicPurpose;
+  framingQuestion: string | null;
+  timeboxMinutes: number | null;
+  outcome: string | null;
+  outcomeState: string | null;
+  firstDiscussedAt: string | null;
+  agendaItemId: string | null;
+  originHuddleId?: string | null;
   horizon: HuddleTopicHorizon;
   deferCount: number;
   ownerUserId: string | null;
