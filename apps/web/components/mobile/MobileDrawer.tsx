@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useParams, usePathname } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { useTheme } from '@/lib/theme';
@@ -173,6 +173,20 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Small colour dot standing in for a space's identity.
+function Dot({ id }: { id: string }) {
+  return (
+    <span
+      style={{
+        width: 10, height: 10, borderRadius: '50%',
+        background: workspaceColor(id), display: 'inline-block',
+      }}
+    />
+  );
+}
+
+const SPACES_OPEN_KEY = 'zentra_drawer_spaces_open';
+
 export default function MobileDrawer({ open, onClose, workspaces }: Props) {
   const router = useRouter();
   const params = useParams();
@@ -181,6 +195,24 @@ export default function MobileDrawer({ open, onClose, workspaces }: Props) {
   const { theme, toggle: toggleTheme } = useTheme();
   const currentWorkspaceId = params.workspaceId as string | undefined;
   const isOnAllSpaces = pathname.startsWith('/workspaces/all');
+
+  // Collapsed by default once the list is long enough to crowd out everything
+  // below it; whatever the user picks is remembered. Read after mount so the
+  // server-rendered markup and first client render agree.
+  const [spacesOpen, setSpacesOpen] = useState(true);
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(SPACES_OPEN_KEY);
+      if (saved !== null) setSpacesOpen(saved === '1');
+      else setSpacesOpen(workspaces.length <= 6);
+    } catch { /* storage unavailable — leave it open */ }
+  }, [workspaces.length]);
+
+  function persistSpacesOpen(next: boolean) {
+    try { window.localStorage.setItem(SPACES_OPEN_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+  }
+
+  const activeWorkspace = workspaces.find((w) => w.id === currentWorkspaceId) ?? null;
 
   // Lock body scroll when open
   useEffect(() => {
@@ -240,9 +272,14 @@ export default function MobileDrawer({ open, onClose, workspaces }: Props) {
           </div>
         </div>
 
-        {/* Scrollable middle */}
+        {/* Scrollable middle.
+            Order matters: the fixed-length sections come first so the app's
+            main destinations are always on screen. Spaces is the only section
+            that grows with the account, so it goes last and can be collapsed —
+            with ten spaces it previously pushed Library off the bottom, hiding
+            Huddles, Echoes and Friends behind a scroll. */}
         <div className="flex-1 overflow-y-auto py-2">
-          {/* Quick actions */}
+          {/* Daily */}
           <div className="px-2 pb-1">
             <SectionLabel>Daily</SectionLabel>
             <Row icon={Icon.flow} label="Flow — Today" active={pathname === '/today'} onClick={() => nav('/today')} />
@@ -250,39 +287,17 @@ export default function MobileDrawer({ open, onClose, workspaces }: Props) {
             <Row icon={Icon.reflect} label="Reflect" active={pathname === '/reflect'} onClick={() => nav('/reflect')} />
           </div>
 
-          {/* Spaces */}
+          {/* Library */}
           <div className="px-2 pt-2 pb-1" style={{ borderTop: '1px solid var(--ink-border-subtle)' }}>
-            <SectionLabel>Spaces</SectionLabel>
-            {workspaces.length > 1 && (
-              <Row
-                icon={Icon.allSpaces}
-                label="All spaces"
-                active={isOnAllSpaces}
-                onClick={() => nav('/workspaces/all')}
-              />
-            )}
-            {sortedWorkspaces.map((ws) => (
-              <Row
-                key={ws.id}
-                leading={
-                  <span
-                    style={{
-                      width: 10,
-                      height: 10,
-                      borderRadius: '50%',
-                      background: workspaceColor(ws.id),
-                      display: 'inline-block',
-                    }}
-                  />
-                }
-                label={ws.name}
-                active={ws.id === currentWorkspaceId && !isOnAllSpaces}
-                onClick={() => nav(`/workspaces/${ws.id}`)}
-              />
-            ))}
+            <SectionLabel>Library</SectionLabel>
+            <Row icon={Icon.budget} label="Budget" active={pathname.startsWith('/budget')} onClick={() => nav('/budget')} />
+            <Row icon={Icon.lists} label="Lists" active={pathname.startsWith('/lists') || pathname.startsWith('/shopping')} onClick={() => nav('/lists')} />
+            <Row icon={Icon.echoes} label="Echoes" active={pathname.startsWith('/reminders')} onClick={() => nav('/reminders')} />
+            <Row icon={Icon.huddles} label="Huddles" active={pathname.startsWith('/huddles')} onClick={() => nav('/huddles')} />
+            <Row icon={Icon.friends} label="Friends" active={pathname.startsWith('/friends')} onClick={() => nav('/friends')} />
           </div>
 
-          {/* In this space */}
+          {/* In this space — contextual, so it sits next to where you are */}
           {currentWorkspaceId && !isOnAllSpaces && (
             <div className="px-2 pt-2 pb-1" style={{ borderTop: '1px solid var(--ink-border-subtle)' }}>
               <SectionLabel>In this space</SectionLabel>
@@ -293,14 +308,61 @@ export default function MobileDrawer({ open, onClose, workspaces }: Props) {
             </div>
           )}
 
-          {/* Library */}
+          {/* Spaces */}
           <div className="px-2 pt-2 pb-1" style={{ borderTop: '1px solid var(--ink-border-subtle)' }}>
-            <SectionLabel>Library</SectionLabel>
-            <Row icon={Icon.budget} label="Budget" active={pathname.startsWith('/budget')} onClick={() => nav('/budget')} />
-            <Row icon={Icon.lists} label="Lists" active={pathname.startsWith('/lists') || pathname.startsWith('/shopping')} onClick={() => nav('/lists')} />
-            <Row icon={Icon.echoes} label="Echoes" active={pathname.startsWith('/reminders')} onClick={() => nav('/reminders')} />
-            <Row icon={Icon.huddles} label="Huddles" active={pathname.startsWith('/huddles')} onClick={() => nav('/huddles')} />
-            <Row icon={Icon.friends} label="Friends" active={pathname.startsWith('/friends')} onClick={() => nav('/friends')} />
+            <button
+              type="button"
+              onClick={() => setSpacesOpen((v) => { persistSpacesOpen(!v); return !v; })}
+              aria-expanded={spacesOpen}
+              className="w-full flex items-center gap-1.5 px-3 mb-1.5 mt-1"
+              style={{
+                fontSize: 10, fontWeight: 600, letterSpacing: '0.08em',
+                textTransform: 'uppercase', color: 'var(--ink-text-faint)',
+              }}
+            >
+              <svg
+                width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"
+                style={{ transform: spacesOpen ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}
+              >
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+              Spaces
+              <span style={{ letterSpacing: 0 }}>{workspaces.length}</span>
+            </button>
+
+            {/* Collapsed still shows where you are, so the drawer never loses
+                your current location. */}
+            {!spacesOpen && activeWorkspace && (
+              <Row
+                leading={<Dot id={activeWorkspace.id} />}
+                label={activeWorkspace.name}
+                active
+                onClick={() => nav(`/workspaces/${activeWorkspace.id}`)}
+              />
+            )}
+
+            {spacesOpen && (
+              <>
+                {workspaces.length > 1 && (
+                  <Row
+                    icon={Icon.allSpaces}
+                    label="All spaces"
+                    active={isOnAllSpaces}
+                    onClick={() => nav('/workspaces/all')}
+                  />
+                )}
+                {sortedWorkspaces.map((ws) => (
+                  <Row
+                    key={ws.id}
+                    leading={<Dot id={ws.id} />}
+                    label={ws.name}
+                    active={ws.id === currentWorkspaceId && !isOnAllSpaces}
+                    onClick={() => nav(`/workspaces/${ws.id}`)}
+                  />
+                ))}
+              </>
+            )}
           </div>
         </div>
 

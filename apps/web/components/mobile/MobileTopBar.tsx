@@ -15,6 +15,9 @@ export default function MobileTopBar({ title, onMenuPress, rightAction, logoSrc 
     >
       <button
         onClick={onMenuPress}
+        // The icon carries no text, so without this a screen reader announces
+        // only "button".
+        aria-label="Open menu"
         className="z-btn-icon -ml-1"
         style={{ color: 'var(--ink-text-secondary)' }}
       >
