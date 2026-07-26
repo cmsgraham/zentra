@@ -21,8 +21,16 @@ interface ReportTopic {
 
 interface ReportHuddle {
   id: string; title: string; status: string;
+  meetingType: string;
+  durationMinutes: number;
+  attendeeCount: number;
+  costEstimate: number | null;
   endedAt: string | null; scheduledAt: string | null; createdAt: string;
   opened: number; closed: number; cancelled: number;
+}
+
+interface ByAssignee {
+  name: string; total: number; done: number; overdue: number; completionPct: number;
 }
 
 interface ReportActionItem {
@@ -43,12 +51,18 @@ interface Report {
     ownerName: string | null; createdAt: string;
   }>;
   actionItems: ReportActionItem[];
+  byAssignee: ByAssignee[];
   stats: {
     huddleCount: number; opened: number; closed: number; cancelled: number;
     stillOpen: number; needsDecisionNoApprover: number;
     medianDaysToClose: number | null;
     actionsTotal: number; actionsConverted: number;
     actionsDone: number; actionsOverdue: number;
+    totalMeetingHours: number;
+    decisionsPerMeetingHour: number | null;
+    agendaDecidedPct: number | null;
+    totalCost: number | null;
+    loadedHourlyRate: number | null;
   };
 }
 
@@ -132,6 +146,29 @@ export function HuddleSeriesReportView({ templateId }: { templateId: string }) {
               tone={s.actionsOverdue > 0 ? 'bad' : 'normal'}
             />
           </div>
+
+          {/* What the meeting costs, against what it produces. */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
+            <Stat label="Meeting hours" value={`${s.totalMeetingHours}h`} />
+            <Stat
+              label="Decisions / hour"
+              value={s.decisionsPerMeetingHour == null ? '—' : String(s.decisionsPerMeetingHour)}
+              tone={s.decisionsPerMeetingHour !== null && s.decisionsPerMeetingHour < 0.5 ? 'bad' : 'normal'}
+            />
+            <Stat
+              label="Agenda decided"
+              value={s.agendaDecidedPct == null ? '—' : `${s.agendaDecidedPct}%`}
+            />
+            <Stat
+              label="Estimated cost"
+              value={s.totalCost == null ? 'set a rate' : `$${s.totalCost.toLocaleString()}`}
+            />
+          </div>
+          {s.loadedHourlyRate == null && (
+            <p className="text-[11.5px] mt-2" style={{ color: 'var(--ink-text-muted)' }}>
+              Set a loaded hourly rate in Settings to see what this series costs.
+            </p>
+          )}
 
           {/* Aging leads: what is at risk now, rather than what already finished. */}
           <Section
@@ -238,6 +275,38 @@ export function HuddleSeriesReportView({ templateId }: { templateId: string }) {
             )}
           </Section>
 
+          {report.byAssignee.length > 0 && (
+            <Section title="Follow-through by person" hint="Where the work actually lands, and whether it closes">
+              <div className="overflow-x-auto">
+                <table className="w-full text-[13px]" style={{ color: 'var(--ink-text)' }}>
+                  <thead>
+                    <tr style={{ color: 'var(--ink-text-muted)' }}>
+                      <th className="text-left font-medium py-1.5">Person</th>
+                      <th className="text-right font-medium py-1.5">Actions</th>
+                      <th className="text-right font-medium py-1.5">Done</th>
+                      <th className="text-right font-medium py-1.5">Overdue</th>
+                      <th className="text-right font-medium py-1.5">Completion</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.byAssignee.map((a) => (
+                      <tr key={a.name} style={{ borderTop: '1px solid var(--ink-border-subtle)' }}>
+                        <td className="py-1.5">{a.name}</td>
+                        <td className="text-right py-1.5">{a.total}</td>
+                        <td className="text-right py-1.5">{a.done}</td>
+                        <td className="text-right py-1.5"
+                          style={{ color: a.overdue > 0 ? 'var(--ink-blocked)' : 'inherit' }}>
+                          {a.overdue}
+                        </td>
+                        <td className="text-right py-1.5">{a.completionPct}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Section>
+          )}
+
           <Section title="Decisions" hint="Everything this series has settled, oldest first">
             {report.decisions.length === 0 ? (
               <Empty text="No decisions recorded yet." />
@@ -264,7 +333,8 @@ export function HuddleSeriesReportView({ templateId }: { templateId: string }) {
                     <th className="text-left font-medium py-1.5">Huddle</th>
                     <th className="text-right font-medium py-1.5">Topics</th>
                     <th className="text-right font-medium py-1.5">Closed</th>
-                    <th className="text-right font-medium py-1.5">Cancelled</th>
+                    <th className="text-right font-medium py-1.5">Length</th>
+                    <th className="text-right font-medium py-1.5">Cost</th>
                     <th className="text-right font-medium py-1.5">When</th>
                   </tr>
                 </thead>
@@ -276,7 +346,12 @@ export function HuddleSeriesReportView({ templateId }: { templateId: string }) {
                       </td>
                       <td className="text-right py-1.5">{h.opened}</td>
                       <td className="text-right py-1.5">{h.closed}</td>
-                      <td className="text-right py-1.5">{h.cancelled}</td>
+                      <td className="text-right py-1.5" style={{ color: 'var(--ink-text-muted)' }}>
+                        {h.durationMinutes ? `${h.durationMinutes}m` : '—'}
+                      </td>
+                      <td className="text-right py-1.5" style={{ color: 'var(--ink-text-muted)' }}>
+                        {h.costEstimate == null ? '—' : `$${h.costEstimate.toLocaleString()}`}
+                      </td>
                       <td className="text-right py-1.5" style={{ color: 'var(--ink-text-muted)' }}>
                         {fmtDate(h.endedAt ?? h.scheduledAt ?? h.createdAt)}
                       </td>

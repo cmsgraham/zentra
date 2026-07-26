@@ -210,6 +210,7 @@ export function HuddleDetailView({ huddleId }: { huddleId: string }) {
         onChange={refresh}
       />
       <IntentionBar huddle={huddle} isHost={isHost} onChange={refresh} />
+      {huddle.status !== 'closed' && <OpeningReview huddleId={huddle.id} />}
       <div className="px-4 sm:px-6 lg:px-8 pb-24">
         {huddle.type === 'team' ? (
           <TeamBoard
@@ -241,6 +242,7 @@ function HuddleHeader({
 }: { huddle: HuddleDetail; isHost: boolean; canCheckIn: boolean; onChange: () => void }) {
   const [busy, setBusy] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [readBack, setReadBack] = useState<ReadBack | null>(null);
 
   async function start() {
     setBusy(true);
@@ -263,11 +265,24 @@ function HuddleHeader({
       setBusy(false);
     }
   }
-  async function close() {
-    if (!confirm('Close this huddle? It will be archived.')) return;
+  // Closing goes through a read-back rather than a bare confirm: the host sees
+  // exactly what was captured before the meeting is sealed.
+  async function openReadBack() {
     setBusy(true);
-    try { await api(`/huddles/${huddle.id}/close`, { method: 'POST', body: {} }); onChange(); }
-    finally { setBusy(false); }
+    try {
+      const rb = await api<ReadBack>(`/huddles/${huddle.id}/read-back`);
+      setReadBack(rb);
+    } catch (e: any) {
+      alert(e?.message ?? 'Could not load the read-back');
+    } finally { setBusy(false); }
+  }
+  async function confirmClose() {
+    setBusy(true);
+    try {
+      await api(`/huddles/${huddle.id}/close`, { method: 'POST', body: {} });
+      setReadBack(null);
+      onChange();
+    } finally { setBusy(false); }
   }
   async function checkIn() {
     setBusy(true);
@@ -341,7 +356,7 @@ function HuddleHeader({
             </button>
           )}
           {isHost && huddle.status === 'active' && (
-            <button onClick={close} disabled={busy}
+            <button onClick={openReadBack} disabled={busy}
               className="px-3.5 py-1.5 rounded-full text-[12.5px]"
               style={{ background: 'var(--ink-surface-raised)', color: 'var(--ink-text)', fontWeight: 550, border: '1px solid var(--ink-border)' }}>
               Close huddle
@@ -393,6 +408,14 @@ function HuddleHeader({
     {shareOpen && (
       <ShareHuddleModal huddle={huddle} onClose={() => setShareOpen(false)} />
     )}
+    {readBack && (
+      <ReadBackModal
+        data={readBack}
+        busy={busy}
+        onCancel={() => setReadBack(null)}
+        onConfirm={confirmClose}
+      />
+    )}
     </>
   );
 }
@@ -421,6 +444,228 @@ function ParticipantStack({ participants }: { participants: HuddleDetail['partic
       )}
     </div>
   );
+}
+
+// ── Opening review ───────────────────────────────────────────────────────
+
+interface OpeningReviewData {
+  previousHuddle: { id: string; title: string } | null;
+  actionItems: Array<{
+    id: string; text: string; ownerName: string | null;
+    dueDate: string | null; done: boolean; overdue: boolean; tracked: boolean;
+  }>;
+  summary: { total: number; done: number; overdue: number };
+}
+
+// An agenda should open by facing what was promised last time, so this sits
+// above the board rather than being something you have to go and look for.
+function OpeningReview({ huddleId }: { huddleId: string }) {
+  const [data, setData] = useState<OpeningReviewData | null>(null);
+  const [open, setOpen] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await api<OpeningReviewData>(`/huddles/${huddleId}/opening-review`);
+        if (!cancelled) setData(r);
+      } catch { /* a missing review should never block the board */ }
+    })();
+    return () => { cancelled = true; };
+  }, [huddleId]);
+
+  if (!data || !data.previousHuddle || data.actionItems.length === 0) return null;
+  const { summary } = data;
+
+  return (
+    <div className="px-4 sm:px-6 lg:px-8 pt-4">
+      <div className="rounded-xl overflow-hidden"
+        style={{ background: 'var(--ink-surface)', border: '1px solid var(--ink-border-subtle)' }}>
+        <button
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="w-full flex items-center gap-2 px-4 py-2.5 text-left"
+        >
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"
+            style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', color: 'var(--ink-text-muted)' }}>
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
+          <span className="text-[13px] font-semibold" style={{ color: 'var(--ink-text)' }}>
+            Since {data.previousHuddle.title}
+          </span>
+          <span className="text-[11.5px]" style={{ color: 'var(--ink-text-muted)' }}>
+            {summary.done}/{summary.total} done
+          </span>
+          {summary.overdue > 0 && (
+            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+              style={{ background: 'var(--ink-accent-subtle)', color: 'var(--ink-blocked)', fontWeight: 600 }}>
+              {summary.overdue} overdue
+            </span>
+          )}
+        </button>
+
+        {open && (
+          <ul className="px-4 pb-3 space-y-1.5">
+            {data.actionItems.map((a) => (
+              <li key={a.id} className="flex items-start gap-2.5 text-[13px]"
+                style={{ opacity: a.done ? 0.55 : 1 }}>
+                <span style={{
+                  width: 14, height: 14, marginTop: 3, borderRadius: 3, flexShrink: 0,
+                  border: `1.5px solid ${a.done ? 'var(--ink-done)' : 'var(--ink-border)'}`,
+                  background: a.done ? 'var(--ink-done)' : 'transparent',
+                }} />
+                <span className="flex-1" style={{
+                  color: 'var(--ink-text)',
+                  textDecoration: a.done ? 'line-through' : 'none',
+                }}>
+                  {a.text}
+                </span>
+                <span className="text-[11.5px] shrink-0"
+                  style={{ color: a.overdue ? 'var(--ink-blocked)' : 'var(--ink-text-muted)', fontWeight: a.overdue ? 600 : 400 }}>
+                  {a.ownerName ?? '—'}
+                  {a.dueDate ? ` · ${a.dueDate}` : ''}
+                  {a.overdue ? ' · overdue' : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Read-back before closing ─────────────────────────────────────────────
+
+interface ReadBack {
+  decisions: Array<{
+    decisionText: string; decisionType: string | null;
+    topicTitle: string; ownerName: string | null;
+  }>;
+  actionItems: Array<{
+    text: string; ownerName: string | null; dueDate: string | null; tracked: boolean;
+  }>;
+  unresolvedTopics: Array<{ title: string; status: string; deferCount: number }>;
+  warnings: string[];
+}
+
+// A meeting is only worth what survives it, so the host confirms the captured
+// record explicitly rather than closing on a one-line browser confirm.
+function ReadBackModal({
+  data, busy, onCancel, onConfirm,
+}: { data: ReadBack; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+  const nothingCaptured = data.decisions.length === 0 && data.actionItems.length === 0;
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6"
+      style={{ background: 'rgba(8,12,28,0.55)' }}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Confirm what this huddle captured"
+    >
+      <div
+        className="w-full sm:max-w-lg rounded-t-2xl sm:rounded-2xl overflow-hidden flex flex-col"
+        style={{ background: 'var(--ink-bg)', maxHeight: '88vh' }}
+      >
+        <div className="px-5 py-4" style={{ borderBottom: '1px solid var(--ink-border-subtle)' }}>
+          <h2 className="text-[16px] font-semibold" style={{ color: 'var(--ink-text)' }}>
+            Before you close
+          </h2>
+          <p className="text-[12.5px] mt-0.5" style={{ color: 'var(--ink-text-muted)' }}>
+            This is everything the huddle captured. Confirm it reads correctly.
+          </p>
+        </div>
+
+        <div className="px-5 py-4 overflow-y-auto flex-1 space-y-5">
+          {data.warnings.length > 0 && (
+            <div className="rounded-lg p-3 text-[12.5px]"
+              style={{ background: 'var(--ink-accent-subtle)', border: '1px dashed var(--ink-blocked)' }}>
+              <div style={{ color: 'var(--ink-blocked)', fontWeight: 600, marginBottom: 4 }}>
+                Worth fixing first
+              </div>
+              <ul className="space-y-0.5" style={{ color: 'var(--ink-text)' }}>
+                {data.warnings.map((w, i) => <li key={i}>· {w}</li>)}
+              </ul>
+            </div>
+          )}
+
+          <ReadBackSection title={`Decisions (${data.decisions.length})`}>
+            {data.decisions.length === 0
+              ? <ReadBackEmpty text="No decisions were recorded." />
+              : data.decisions.map((d, i) => (
+                <li key={i} className="text-[13.5px]" style={{ color: 'var(--ink-text)' }}>
+                  {d.decisionText}
+                  <span className="block text-[11.5px]" style={{ color: 'var(--ink-text-muted)' }}>
+                    {d.topicTitle}
+                    {d.ownerName ? ` · ${d.ownerName}` : ''}
+                    {d.decisionType ? ` · ${d.decisionType}` : ''}
+                  </span>
+                </li>
+              ))}
+          </ReadBackSection>
+
+          <ReadBackSection title={`Action items (${data.actionItems.length})`}>
+            {data.actionItems.length === 0
+              ? <ReadBackEmpty text="No action items were captured." />
+              : data.actionItems.map((a, i) => (
+                <li key={i} className="text-[13.5px]" style={{ color: 'var(--ink-text)' }}>
+                  {a.text}
+                  <span className="block text-[11.5px]" style={{ color: 'var(--ink-text-muted)' }}>
+                    {a.ownerName ?? 'no owner'}
+                    {a.dueDate ? ` · due ${a.dueDate}` : ' · no due date'}
+                    {a.tracked ? ' · tracked' : ' · not in the tracker'}
+                  </span>
+                </li>
+              ))}
+          </ReadBackSection>
+
+          {data.unresolvedTopics.length > 0 && (
+            <ReadBackSection title={`Rolling forward (${data.unresolvedTopics.length})`}>
+              {data.unresolvedTopics.map((t, i) => (
+                <li key={i} className="text-[13.5px]" style={{ color: 'var(--ink-text)' }}>
+                  {t.title}
+                  <span className="block text-[11.5px]" style={{ color: 'var(--ink-text-muted)' }}>
+                    {t.status.replace('_', ' ')}
+                    {t.deferCount > 0 ? ` · deferred ×${t.deferCount}` : ''}
+                  </span>
+                </li>
+              ))}
+            </ReadBackSection>
+          )}
+        </div>
+
+        <div className="px-5 py-3 flex items-center justify-end gap-2"
+          style={{ borderTop: '1px solid var(--ink-border-subtle)' }}>
+          <button onClick={onCancel} disabled={busy} className="text-[13px] px-3 py-1.5"
+            style={{ color: 'var(--ink-text-muted)' }}>
+            Go back
+          </button>
+          <button onClick={onConfirm} disabled={busy}
+            className="text-[13px] px-4 py-1.5 rounded-full"
+            style={{ background: 'var(--ink-accent)', color: 'var(--ink-on-accent)', fontWeight: 600 }}>
+            {nothingCaptured ? 'Close anyway' : 'Confirm and close'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReadBackSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section>
+      <h3 className="text-[11px] uppercase tracking-wider mb-1.5"
+        style={{ color: 'var(--ink-text-muted)', fontWeight: 700, letterSpacing: '0.07em' }}>
+        {title}
+      </h3>
+      <ul className="space-y-2">{children}</ul>
+    </section>
+  );
+}
+
+function ReadBackEmpty({ text }: { text: string }) {
+  return <li className="text-[12.5px]" style={{ color: 'var(--ink-text-faint)' }}>{text}</li>;
 }
 
 // ── Sticky intention bar ─────────────────────────────────────────────────

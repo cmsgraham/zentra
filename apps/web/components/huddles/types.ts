@@ -2,6 +2,8 @@
 // to avoid cross-package import friction. Mirrors packages/shared/src/types/huddle.ts.
 
 export type HuddleType = 'team' | 'personal';
+// What KIND of meeting this is, separate from which board renders it.
+export type HuddleMeetingType = 'standup' | 'tactical' | 'strategic' | 'adhoc' | 'one_on_one';
 export type HuddleStatus = 'draft' | 'active' | 'closed';
 export type HuddleParticipantRole = 'host' | 'participant';
 export type HuddleAttendanceStatus = 'invited' | 'present' | 'late' | 'virtual' | 'excused';
@@ -31,6 +33,9 @@ export interface Huddle {
   startedAt: string | null;
   endedAt: string | null;
   summary: string | null;
+  meetingType: HuddleMeetingType;
+  plannedDurationMinutes: number | null;
+  preReadUrl: string | null;
   templateId: string | null;
   templateName?: string | null;
   emailSummaryOnClose?: boolean;
@@ -46,6 +51,8 @@ export interface HuddleParticipant {
   userId: string | null;
   role: HuddleParticipantRole;
   attendanceStatus: HuddleAttendanceStatus;
+  isRequired: boolean;
+  isDecider: boolean;
   checkedInAt: string | null;
   userName?: string;
   userEmail?: string;
@@ -72,6 +79,10 @@ export interface HuddleDecision {
   huddleTopicId: string;
   ownerUserId: string | null;
   decisionText: string;
+  rationale: string | null;
+  decisionType: 'reversible' | 'irreversible' | null;
+  affectedParties: string | null;
+  supersedesDecisionId: string | null;
   details: string | null;
   createdAt: string;
   ownerName?: string | null;

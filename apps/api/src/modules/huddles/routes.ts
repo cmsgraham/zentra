@@ -7,6 +7,18 @@ import { getEnv } from '../../lib/env.js';
 
 // ─── Schemas ──────────────────────────────────────────────────────────────
 
+// Default shape per meeting type. Standups are blockers-only and deliberately
+// have no topic list; strategic meetings expect a pre-read.
+const MEETING_TYPES = ['standup', 'tactical', 'strategic', 'adhoc', 'one_on_one'] as const;
+const meetingTypeSchema = z.enum(MEETING_TYPES);
+export const MEETING_DEFAULTS: Record<string, { minutes: number; wantsPreRead: boolean; topics: boolean }> = {
+  standup:    { minutes: 15,  wantsPreRead: false, topics: false },
+  tactical:   { minutes: 90,  wantsPreRead: false, topics: true  },
+  strategic:  { minutes: 180, wantsPreRead: true,  topics: true  },
+  adhoc:      { minutes: 30,  wantsPreRead: false, topics: true  },
+  one_on_one: { minutes: 30,  wantsPreRead: false, topics: true  },
+};
+
 const externalAttendeeSchema = z.object({
   name: z.string().min(1).max(120),
   email: z.string().email().max(254).nullable().optional(),
@@ -23,10 +35,16 @@ const createHuddleSchema = z.object({
   // Records which template this huddle was started from, so a recurring
   // meeting can be reported on as a series.
   templateId: z.string().uuid().optional().nullable(),
+  meetingType: meetingTypeSchema.optional(),
+  plannedDurationMinutes: z.number().int().min(5).max(480).optional().nullable(),
+  preReadUrl: z.string().max(2000).optional().nullable(),
 });
 
 const updateHuddleSchema = z.object({
   title: z.string().min(1).max(200).optional(),
+  meetingType: meetingTypeSchema.optional(),
+  plannedDurationMinutes: z.number().int().min(5).max(480).nullable().optional(),
+  preReadUrl: z.string().max(2000).nullable().optional(),
   intention: z.string().max(1000).nullable().optional(),
   scheduledAt: z.string().datetime().nullable().optional(),
   status: z.enum(['draft', 'active', 'closed']).optional(),
@@ -53,6 +71,8 @@ const addParticipantSchema = z.union([
 const updateParticipantSchema = z.object({
   role: z.enum(['host', 'participant']).optional(),
   attendanceStatus: z.enum(['invited', 'present', 'late', 'virtual', 'excused']).optional(),
+  isRequired: z.boolean().optional(),
+  isDecider: z.boolean().optional(),
 });
 
 const detailsField = z.string().max(8000).nullable().optional();
@@ -72,6 +92,9 @@ const updateSignalSchema = z.object({
 const updateDecisionSchema = z.object({
   decisionText: z.string().min(1).max(1000).optional(),
   ownerUserId: z.string().uuid().nullable().optional(),
+  rationale: z.string().max(2000).nullable().optional(),
+  decisionType: z.enum(['reversible', 'irreversible']).nullable().optional(),
+  affectedParties: z.string().max(1000).nullable().optional(),
   details: detailsField,
 });
 
@@ -127,6 +150,11 @@ const closeTopicSchema = z.object({
 const decideTopicSchema = z.object({
   decisionText: z.string().min(1).max(1000),
   ownerUserId: z.string().uuid().nullable().optional(),
+  rationale: z.string().max(2000).nullable().optional(),
+  decisionType: z.enum(['reversible', 'irreversible']).nullable().optional(),
+  affectedParties: z.string().max(1000).nullable().optional(),
+  // Recording a change of mind rather than editing history away.
+  supersedesDecisionId: z.string().uuid().nullable().optional(),
   details: detailsField,
 });
 
@@ -191,6 +219,9 @@ function formatHuddle(r: any) {
     startedAt: r.started_at,
     endedAt: r.ended_at,
     summary: r.summary,
+    meetingType: r.meeting_type ?? 'tactical',
+    plannedDurationMinutes: r.planned_duration_minutes ?? null,
+    preReadUrl: r.pre_read_url ?? null,
     templateId: r.template_id ?? null,
     templateName: r.template_name ?? null,
     emailSummaryOnClose: r.email_summary_on_close ?? false,
@@ -207,6 +238,8 @@ function formatParticipant(r: any) {
     userId: r.user_id ?? null,
     role: r.role,
     attendanceStatus: r.attendance_status,
+    isRequired: r.is_required ?? true,
+    isDecider: r.is_decider ?? false,
     checkedInAt: r.checked_in_at,
     userName: r.user_name ?? undefined,
     userEmail: r.user_email ?? undefined,
@@ -272,6 +305,11 @@ function formatDecision(r: any) {
     huddleTopicId: r.huddle_topic_id,
     ownerUserId: r.owner_user_id,
     decisionText: r.decision_text,
+    rationale: r.rationale ?? null,
+    decisionType: r.decision_type ?? null,
+    affectedParties: r.affected_parties ?? null,
+    supersedesDecisionId: r.supersedes_decision_id ?? null,
+    huddleId: r.huddle_id ?? null,
     details: r.details ?? null,
     createdAt: r.created_at,
     ownerName: r.owner_name ?? null,
@@ -928,13 +966,19 @@ export default async function huddleRoutes(app: FastifyInstance) {
     try {
       await client.query('BEGIN');
 
+      const mType = body.meetingType ?? (body.type === 'personal' ? 'one_on_one' : 'tactical');
       const huddleRes = await client.query(
-        `INSERT INTO huddles (workspace_id, type, title, intention, host_user_id, scheduled_at, status, template_id)
-         VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7)
+        `INSERT INTO huddles
+           (workspace_id, type, title, intention, host_user_id, scheduled_at, status,
+            template_id, meeting_type, planned_duration_minutes, pre_read_url)
+         VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8, $9, $10)
          RETURNING *`,
         [
           body.workspaceId ?? null, body.type, body.title, body.intention ?? null,
           userId, body.scheduledAt ?? null, body.templateId ?? null,
+          mType,
+          body.plannedDurationMinutes ?? MEETING_DEFAULTS[mType].minutes,
+          body.preReadUrl ?? null,
         ],
       );
       const huddle = huddleRes.rows[0];
@@ -1098,6 +1142,9 @@ export default async function huddleRoutes(app: FastifyInstance) {
     const params: any[] = [];
     let i = 1;
     if (body.title !== undefined) { sets.push(`title = $${i++}`); params.push(body.title); }
+    if (body.meetingType !== undefined) { sets.push(`meeting_type = $${i++}`); params.push(body.meetingType); }
+    if (body.plannedDurationMinutes !== undefined) { sets.push(`planned_duration_minutes = $${i++}`); params.push(body.plannedDurationMinutes); }
+    if (body.preReadUrl !== undefined) { sets.push(`pre_read_url = $${i++}`); params.push(body.preReadUrl); }
     if (body.intention !== undefined) { sets.push(`intention = $${i++}`); params.push(body.intention); }
     if (body.scheduledAt !== undefined) { sets.push(`scheduled_at = $${i++}`); params.push(body.scheduledAt); }
     if (body.emailSummaryOnClose !== undefined) {
@@ -1283,6 +1330,125 @@ export default async function huddleRoutes(app: FastifyInstance) {
     return result;
   });
 
+  // ── Opening review ─────────────────────────────────────────────────────
+  // Every agenda should start by facing last time's commitments, so this
+  // returns the previous meeting's action items with their live tracker state.
+  app.get('/huddles/:id/opening-review', { preHandler: [app.authenticate] }, async (request) => {
+    const userId = request.user.sub;
+    const { id } = request.params as { id: string };
+    const huddle = await loadHuddleOrThrow(app, id, userId);
+
+    const prev = await app.pg.query(
+      huddle.template_id
+        ? `SELECT id, title FROM huddles
+            WHERE template_id = $1 AND id <> $2 AND status = 'closed'
+            ORDER BY COALESCE(ended_at, scheduled_at, created_at) DESC LIMIT 1`
+        : `SELECT id, title FROM huddles
+            WHERE COALESCE(workspace_id::text, host_user_id::text) = $1
+              AND id <> $2 AND status = 'closed'
+            ORDER BY COALESCE(ended_at, scheduled_at, created_at) DESC LIMIT 1`,
+      [huddle.template_id ?? (huddle.workspace_id ?? huddle.host_user_id), id],
+    );
+    if (prev.rows.length === 0) {
+      return { previousHuddle: null, actionItems: [], summary: { total: 0, done: 0, overdue: 0 } };
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const items = await app.pg.query(
+      `SELECT i.id, i.text, i.status, i.due_date, i.linked_task_id,
+              tk.status AS task_status, tk.due_date AS task_due_date,
+              u.name AS owner_name
+         FROM huddle_intentions i
+         LEFT JOIN tasks tk ON tk.id = i.linked_task_id
+         LEFT JOIN users u ON u.id = i.owner_user_id
+        WHERE i.huddle_id = $1
+        ORDER BY i.sort_order ASC, i.created_at ASC`,
+      [prev.rows[0].id],
+    );
+
+    const actionItems = items.rows.map((a: any) => {
+      const due = a.task_due_date ?? a.due_date ?? null;
+      const dueStr = due ? new Date(due).toISOString().slice(0, 10) : null;
+      const done = a.task_status === 'done' || a.status === 'done';
+      return {
+        id: a.id, text: a.text, ownerName: a.owner_name ?? null,
+        dueDate: dueStr, done,
+        overdue: !done && !!dueStr && dueStr < today,
+        tracked: !!a.linked_task_id,
+        taskStatus: a.task_status ?? null,
+      };
+    });
+
+    return {
+      previousHuddle: { id: prev.rows[0].id, title: prev.rows[0].title },
+      actionItems,
+      summary: {
+        total: actionItems.length,
+        done: actionItems.filter((a) => a.done).length,
+        overdue: actionItems.filter((a) => a.overdue).length,
+      },
+    };
+  });
+
+  // ── Read-back before closing ───────────────────────────────────────────
+  // What the host must confirm: everything this meeting actually captured.
+  app.get('/huddles/:id/read-back', { preHandler: [app.authenticate] }, async (request) => {
+    const userId = request.user.sub;
+    const { id } = request.params as { id: string };
+    await loadHuddleOrThrow(app, id, userId);
+
+    const [decisions, actions, unresolved] = await Promise.all([
+      app.pg.query(
+        `SELECT d.decision_text, d.decision_type, t.title AS topic_title, u.name AS owner_name
+           FROM huddle_decisions d
+           JOIN huddle_topics t ON t.id = d.huddle_topic_id
+           LEFT JOIN users u ON u.id = d.owner_user_id
+          WHERE d.huddle_id = $1 ORDER BY d.created_at ASC`,
+        [id],
+      ),
+      app.pg.query(
+        `SELECT i.text, i.due_date, i.linked_task_id, u.name AS owner_name
+           FROM huddle_intentions i
+           LEFT JOIN users u ON u.id = i.owner_user_id
+          WHERE i.huddle_id = $1 ORDER BY i.sort_order ASC`,
+        [id],
+      ),
+      app.pg.query(
+        `SELECT t.title, t.status, t.defer_count
+           FROM huddle_agenda_items a JOIN huddle_topics t ON t.id = a.topic_id
+          WHERE a.huddle_id = $1 AND t.status = ANY($2::text[])
+          ORDER BY a.sort_order ASC`,
+        [id, [...TOPIC_LIVE]],
+      ),
+    ]);
+
+    const actionItems = actions.rows.map((a: any) => ({
+      text: a.text,
+      ownerName: a.owner_name ?? null,
+      dueDate: a.due_date ? new Date(a.due_date).toISOString().slice(0, 10) : null,
+      tracked: !!a.linked_task_id,
+    }));
+
+    return {
+      decisions: decisions.rows.map((d: any) => ({
+        decisionText: d.decision_text,
+        decisionType: d.decision_type,
+        topicTitle: d.topic_title,
+        ownerName: d.owner_name ?? null,
+      })),
+      actionItems,
+      // Surfaced so nothing silently rolls forward without being noticed.
+      unresolvedTopics: unresolved.rows.map((t: any) => ({
+        title: t.title, status: t.status, deferCount: t.defer_count ?? 0,
+      })),
+      // An action item with no owner or no date will not survive the week.
+      warnings: [
+        ...actionItems.filter((a) => !a.ownerName).map((a) => `"${a.text}" has no owner`),
+        ...actionItems.filter((a) => !a.dueDate).map((a) => `"${a.text}" has no due date`),
+      ],
+    };
+  });
+
   // ── Invites ────────────────────────────────────────────────────────────
   // Emails everyone on the huddle who has an address — app users and external
   // guests alike. Explicit rather than automatic on create: huddles start as
@@ -1413,6 +1579,8 @@ export default async function huddleRoutes(app: FastifyInstance) {
     const params: any[] = [];
     let i = 1;
     if (body.role) { sets.push(`role = $${i++}`); params.push(body.role); }
+    if (body.isRequired !== undefined) { sets.push(`is_required = $${i++}`); params.push(body.isRequired); }
+    if (body.isDecider !== undefined) { sets.push(`is_decider = $${i++}`); params.push(body.isDecider); }
     if (body.attendanceStatus) {
       sets.push(`attendance_status = $${i++}`); params.push(body.attendanceStatus);
       if (body.attendanceStatus === 'present') sets.push(`checked_in_at = COALESCE(checked_in_at, now())`);
@@ -1719,9 +1887,13 @@ export default async function huddleRoutes(app: FastifyInstance) {
       const dec = await client.query(
         // huddle_id records which meeting actually made the call — a topic can
         // now span several, so it can no longer be inferred from the topic.
-        `INSERT INTO huddle_decisions (huddle_topic_id, huddle_id, owner_user_id, decision_text, details)
-         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-        [tid, id, body.ownerUserId ?? null, body.decisionText, body.details ?? null],
+        `INSERT INTO huddle_decisions
+           (huddle_topic_id, huddle_id, owner_user_id, decision_text, details,
+            rationale, decision_type, affected_parties, supersedes_decision_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+        [tid, id, body.ownerUserId ?? null, body.decisionText, body.details ?? null,
+         body.rationale ?? null, body.decisionType ?? null,
+         body.affectedParties ?? null, body.supersedesDecisionId ?? null],
       );
       // Recording a decision closes the topic. The non-empty decision log is
       // what makes it render as "Decided" rather than plain "Closed".
@@ -1852,6 +2024,9 @@ export default async function huddleRoutes(app: FastifyInstance) {
     const params: any[] = [];
     let i = 1;
     if (body.decisionText !== undefined) { sets.push(`decision_text = $${i++}`); params.push(body.decisionText); }
+    if (body.rationale !== undefined) { sets.push(`rationale = $${i++}`); params.push(body.rationale); }
+    if (body.decisionType !== undefined) { sets.push(`decision_type = $${i++}`); params.push(body.decisionType); }
+    if (body.affectedParties !== undefined) { sets.push(`affected_parties = $${i++}`); params.push(body.affectedParties); }
     if (body.ownerUserId !== undefined) { sets.push(`owner_user_id = $${i++}`); params.push(body.ownerUserId); }
     if (body.details !== undefined) { sets.push(`details = $${i++}`); params.push(body.details); }
     if (sets.length === 0) return { decision: formatDecision(cur.rows[0]) };
@@ -2088,7 +2263,8 @@ export default async function huddleRoutes(app: FastifyInstance) {
     const tpl = tr.rows[0];
 
     const huddlesRes = await app.pg.query(
-      `SELECT id, title, status, scheduled_at, started_at, ended_at, created_at
+      `SELECT id, title, status, scheduled_at, started_at, ended_at, created_at,
+              meeting_type, planned_duration_minutes
          FROM huddles WHERE template_id = $1
         ORDER BY COALESCE(ended_at, scheduled_at, created_at) ASC`,
       [tid],
@@ -2205,6 +2381,47 @@ export default async function huddleRoutes(app: FastifyInstance) {
       huddleId: t.huddle_id, huddleTitle: t.huddle_title,
     });
 
+    // Actual length when we have both ends, else the planned figure.
+    const actualMinutes = (h: any) => {
+      if (h.started_at && h.ended_at) {
+        return Math.max(0, Math.round(
+          (new Date(h.ended_at).getTime() - new Date(h.started_at).getTime()) / 60000));
+      }
+      return h.planned_duration_minutes ?? 0;
+    };
+
+    const rateRow = await app.pg.query(
+      'SELECT huddle_loaded_hourly_rate AS rate FROM users WHERE id = $1', [userId],
+    );
+    const rate = rateRow.rows[0]?.rate != null ? Number(rateRow.rows[0].rate) : null;
+
+    const attendeeRes = await app.pg.query(
+      `SELECT huddle_id, count(*)::int AS n FROM huddle_participants
+        WHERE huddle_id = ANY($1::uuid[]) GROUP BY huddle_id`,
+      [huddleIds],
+    );
+    const attendeeCounts = new Map<string, number>(
+      attendeeRes.rows.map((r: any) => [r.huddle_id, r.n]),
+    );
+
+    const totalMinutes = huddlesRes.rows.reduce((m: number, h: any) => m + actualMinutes(h), 0);
+    const totalCost = rate == null ? 0 : huddlesRes.rows.reduce(
+      (c: number, h: any) =>
+        c + (actualMinutes(h) / 60) * (attendeeCounts.get(h.id) ?? 0) * rate, 0);
+
+    // Of everything that reached an agenda, how much actually got decided.
+    const agendaRes = await app.pg.query(
+      `SELECT count(*)::int AS total,
+              count(*) FILTER (
+                WHERE EXISTS (SELECT 1 FROM huddle_decisions d WHERE d.huddle_topic_id = a.topic_id)
+              )::int AS decided
+         FROM huddle_agenda_items a
+        WHERE a.huddle_id = ANY($1::uuid[])`,
+      [huddleIds],
+    );
+    const agendaTotal = agendaRes.rows[0]?.total ?? 0;
+    const agendaDecided = agendaRes.rows[0]?.decided ?? 0;
+
     const today = new Date().toISOString().slice(0, 10);
     const actionItems = actionsRes.rows.map((a: any) => {
       const due = a.task_due_date ?? a.due_date ?? null;
@@ -2223,10 +2440,27 @@ export default async function huddleRoutes(app: FastifyInstance) {
       };
     });
 
+    // Completion rate per person. Unassigned work rolls up under a single
+    // bucket rather than being dropped, since that is itself a signal.
+    const assigneeRoll = new Map<string, { total: number; done: number; overdue: number }>();
+    for (const a of actionItems) {
+      const key = a.ownerName ?? 'Unassigned';
+      const v = assigneeRoll.get(key) ?? { total: 0, done: 0, overdue: 0 };
+      v.total += 1;
+      if (a.done) v.done += 1;
+      if (a.overdue) v.overdue += 1;
+      assigneeRoll.set(key, v);
+    }
+
     return {
       template: { id: tpl.id, name: tpl.name, type: tpl.type },
       huddles: huddlesRes.rows.map((h: any) => ({
         id: h.id, title: h.title, status: h.status,
+        meetingType: h.meeting_type,
+        durationMinutes: actualMinutes(h),
+        attendeeCount: attendeeCounts.get(h.id) ?? 0,
+        costEstimate: rate == null ? null
+          : Math.round((actualMinutes(h) / 60) * (attendeeCounts.get(h.id) ?? 0) * rate),
         endedAt: h.ended_at, scheduledAt: h.scheduled_at, createdAt: h.created_at,
         // Per-huddle throughput, so an opened-faster-than-closed trend is visible.
         opened: agendaCounts.get(h.id)?.total ?? 0,
@@ -2268,7 +2502,28 @@ export default async function huddleRoutes(app: FastifyInstance) {
         actionsConverted: actionItems.filter((a) => a.converted).length,
         actionsDone: actionItems.filter((a) => a.done).length,
         actionsOverdue: actionItems.filter((a) => a.overdue).length,
+        // Metrics that needed a duration, and so could not be answered before.
+        totalMeetingHours: Math.round(totalMinutes / 6) / 10,
+        decisionsPerMeetingHour: totalMinutes > 0
+          ? Math.round((decisionsRes.rows.length / (totalMinutes / 60)) * 10) / 10
+          : null,
+        // Share of agenda items that actually reached a decision.
+        agendaDecidedPct: agendaTotal > 0
+          ? Math.round((agendaDecided / agendaTotal) * 100)
+          : null,
+        totalCost: rate == null ? null : Math.round(totalCost),
+        loadedHourlyRate: rate,
       },
+      // Completion per person, so a series with one overloaded owner is visible.
+      byAssignee: [...assigneeRoll.entries()]
+        .map(([name, v]) => ({
+          name,
+          total: v.total,
+          done: v.done,
+          overdue: v.overdue,
+          completionPct: v.total > 0 ? Math.round((v.done / v.total) * 100) : 0,
+        }))
+        .sort((a, b) => b.total - a.total),
     };
   });
 
