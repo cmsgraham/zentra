@@ -1992,22 +1992,6 @@ export default async function huddleRoutes(app: FastifyInstance) {
     return { topic: await topicWithNames(tid, id) };
   });
 
-  // Deprecated alias kept so an older cached web bundle doesn't 404 mid-deploy.
-  app.post('/huddles/:id/topics/:tid/park', { preHandler: [app.authenticate] }, async (request) => {
-    const userId = request.user.sub;
-    const { id, tid } = request.params as { id: string; tid: string };
-    await loadHuddleOrThrow(app, id, userId);
-    const r = await app.pg.query(
-      `UPDATE huddle_topics
-          SET status = 'deferred', updated_at = now()
-        WHERE id = $1 AND EXISTS (SELECT 1 FROM huddle_agenda_items a
-                 WHERE a.topic_id = huddle_topics.id AND a.huddle_id = $2) RETURNING id`,
-      [tid, id],
-    );
-    if (r.rows.length === 0) throw new NotFoundError('Topic not found');
-    return { topic: await topicWithNames(tid, id) };
-  });
-
   app.put('/huddles/:id/decisions/:did', { preHandler: [app.authenticate] }, async (request) => {
     const userId = request.user.sub;
     const { id, did } = request.params as { id: string; did: string };
