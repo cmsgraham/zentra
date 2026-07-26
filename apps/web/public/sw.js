@@ -15,7 +15,7 @@
  * Cache versioning: bump CACHE_VERSION to invalidate on deploy.
  */
 
-const CACHE_VERSION = 'v33';
+const CACHE_VERSION = 'v34';
 const SHELL_CACHE   = `zentra-shell-${CACHE_VERSION}`;
 const STATIC_CACHE  = `zentra-static-${CACHE_VERSION}`;
 const API_CACHE     = `zentra-api-${CACHE_VERSION}`;

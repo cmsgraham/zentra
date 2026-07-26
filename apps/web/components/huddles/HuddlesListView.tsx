@@ -158,7 +158,33 @@ function HuddleRow({ huddle: f }: { huddle: Huddle }) {
 // Recurring huddles started from one template all share the template's default
 // title, so a flat list of same-named rows is impossible to navigate. Group
 // each occurrence under its series instead, newest series first.
+// Collapsed groups are remembered so the list looks the same when you come
+// back from a huddle — nothing is more annoying than re-collapsing every time.
+const COLLAPSED_KEY = 'zentra_huddle_groups_collapsed';
+
 function GroupedByTemplate({ huddles }: { huddles: Huddle[] }) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
+  // Read after mount rather than in useState, so the server-rendered markup and
+  // the first client render agree (localStorage doesn't exist during SSR).
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(COLLAPSED_KEY);
+      if (raw) setCollapsed(new Set(JSON.parse(raw) as string[]));
+    } catch { /* corrupt or unavailable storage is not worth failing over */ }
+  }, []);
+
+  function toggle(key: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      try {
+        window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
+      } catch { /* ignore */ }
+      return next;
+    });
+  }
+
   const groups = new Map<string, { name: string | null; templateId: string | null; items: Huddle[] }>();
   for (const h of huddles) {
     const key = h.templateId ?? '__none__';
@@ -183,15 +209,36 @@ function GroupedByTemplate({ huddles }: { huddles: Huddle[] }) {
 
   return (
     <div className="space-y-6">
-      {sorted.map((g) => (
-        <section key={g.templateId ?? '__none__'}>
+      {sorted.map((g) => {
+        const key = g.templateId ?? '__none__';
+        const open = !collapsed.has(key);
+        return (
+        <section key={key}>
           <div className="flex items-baseline justify-between gap-3 mb-2">
-            <h2 className="text-[13px] font-semibold" style={{ color: 'var(--ink-text)' }}>
+            <button
+              type="button"
+              onClick={() => toggle(key)}
+              aria-expanded={open}
+              className="flex items-baseline gap-1.5 text-[13px] font-semibold text-left"
+              style={{ color: 'var(--ink-text)' }}
+            >
+              <svg
+                width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"
+                style={{
+                  transform: open ? 'rotate(90deg)' : 'rotate(0deg)',
+                  transition: 'transform 0.15s',
+                  color: 'var(--ink-text-muted)',
+                  alignSelf: 'center',
+                }}
+              >
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
               {g.name ?? 'Not from a template'}
-              <span style={{ color: 'var(--ink-text-muted)', fontWeight: 450, marginLeft: 6 }}>
+              <span style={{ color: 'var(--ink-text-muted)', fontWeight: 450 }}>
                 {g.items.length}
               </span>
-            </h2>
+            </button>
             {g.templateId && (
               <Link
                 href={`/huddles/templates/${g.templateId}/report`}
@@ -202,11 +249,14 @@ function GroupedByTemplate({ huddles }: { huddles: Huddle[] }) {
               </Link>
             )}
           </div>
-          <ul className="grid gap-2.5">
-            {g.items.map((f) => <li key={f.id}><HuddleRow huddle={f} /></li>)}
-          </ul>
+          {open && (
+            <ul className="grid gap-2.5">
+              {g.items.map((f) => <li key={f.id}><HuddleRow huddle={f} /></li>)}
+            </ul>
+          )}
         </section>
-      ))}
+        );
+      })}
     </div>
   );
 }
