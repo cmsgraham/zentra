@@ -12,8 +12,21 @@ services:
       - 1.1.1.1
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Serves /reflection. This line existed only on the server for months --
+      # a hand-edit that was never committed, so any rebuild from this repo
+      # would have quietly dropped the page.
+      - ./static:/srv/static:ro
       - zentra_caddy_data:/data
       - zentra_caddy_config:/config
+    # This Caddy is the whole HOST's TLS terminator, not just Zentra's: it owns
+    # :80/:443 and the ACME account, and its Caddyfile now carries the site
+    # blocks for the co-hosted BrewCult stack as well. `edge` is how it reaches
+    # those containers. Without this line a plain `docker compose up -d` here
+    # recreates caddy WITHOUT the shared network, and brewcult.coffee starts
+    # answering 502 while Zentra itself looks perfectly healthy.
+    networks:
+      - default
+      - edge
     depends_on:
       web:
         condition: service_started
@@ -137,6 +150,14 @@ services:
         echo "Migrations complete."
       '
     restart: "no"
+
+networks:
+  default: # Zentra's own private network -- unchanged
+  edge:
+    # Shared with co-hosted stacks; created out-of-band via
+    # `docker network create edge`. Declared external so that `docker compose
+    # down` on either stack cannot delete the network the other is still using.
+    external: true
 
 volumes:
   zentra_pgdata:
