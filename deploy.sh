@@ -66,12 +66,31 @@ rsync_caddy() {
   echo "✓ Caddy reloaded"
 }
 
+# Keep the BuildKit cache bounded. Cache is what makes the next build fast, so
+# we keep a working set rather than dropping everything.
+BUILD_CACHE_CEILING="${BUILD_CACHE_CEILING:-10GB}"
+bound_build_cache() {
+  echo "→ Trimming build cache above $BUILD_CACHE_CEILING..."
+  # --keep-storage was renamed --reserved-space in newer Docker; try both.
+  ssh_run "docker builder prune -f --reserved-space=$BUILD_CACHE_CEILING >/dev/null 2>&1         || docker builder prune -f --keep-storage=$BUILD_CACHE_CEILING >/dev/null 2>&1         || true"
+  ssh_run "df -h / | tail -1"
+}
+
 build_and_restart() {
   local service="$1"
   echo "→ Building $service..."
-  ssh_run "cd $REMOTE/infra && docker compose -f docker-compose.prod.yml --env-file $REMOTE/.env.prod build --no-cache $service"
+  # NOTE: --no-cache was REMOVED on 2026-08-05. It forced a full rebuild every
+  # deploy, and BuildKit stored each one as a fresh ~600-800MB cache entry that
+  # could never be reused. Dozens of those accumulated to 48 GB in
+  # /var/lib/containerd and took the disk to 85% full (12 GB left) on the box
+  # that also runs Postgres and the mail server. Building WITH cache is both
+  # faster and the reason the disk stops growing.
+  # If a build genuinely needs to ignore cache, do it as a one-off by hand:
+  #   ssh ... "cd .../infra && docker compose ... build --no-cache <service>"
+  ssh_run "cd $REMOTE/infra && docker compose -f docker-compose.prod.yml --env-file $REMOTE/.env.prod build $service"
   echo "→ Restarting $service..."
   ssh_run "cd $REMOTE/infra && docker compose -f docker-compose.prod.yml --env-file $REMOTE/.env.prod up -d $service"
+  bound_build_cache
   echo "✓ $service deployed"
 }
 
